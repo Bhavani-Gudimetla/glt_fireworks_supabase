@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#08090e">
+<title>GLT Fireworks</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Telugu:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css?v=20260921-8">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+<div id="print-area" style="display:none"></div>
+<div id="toast"></div>
+
+<div id="login-page">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="ico">&#127878;</div>
+      <h1>GLT Fireworks</h1>
+      <p>Gollagunta - Management System</p>
+    </div>
+    <div id="login-err"></div>
+    <div class="fg">
+      <label class="lbl">Username / యూజర్‌నేమ్</label>
+      <input class="inp" id="inp-user" placeholder="Enter username" autocomplete="username">
+    </div>
+    <div class="fg">
+      <label class="lbl">Password / పాస్వర్డ్</label>
+      <input class="inp" id="inp-pass" type="password" placeholder="Enter password" autocomplete="current-password">
+    </div>
+    <button class="btn btn-r btn-xl" id="btn-login">&#128273; Login</button>
+  </div>
+</div>
+
+<div id="app" style="display:none">
+  <nav id="nav">
+    <div class="nav-top">
+      <div class="nav-brand">
+        <span class="nav-logo">&#127878;</span>
+        <div><h1>GLT Fireworks</h1><p>Gollagunta</p></div>
+      </div>
+      <div class="nav-actions">
+        <button class="sync-badge" id="sync-queue-badge" onclick="uploadWaitingChanges()" style="display:none"></button>
+        <button class="btn btn-home btn-sm" id="btn-home" onclick="exitToHome()" title="Home">&#127968;</button>
+        <div id="user-profile-nav" class="user-badge">
+          &#128100; <span id="user-role-badge">ADMIN</span>
+        </div>
+        <div class="lang-tog">
+          <button class="lang-btn on" id="btn-en" onclick="setLang('en')">EN</button>
+          <button class="lang-btn" id="btn-te" onclick="setLang('te')">తె</button>
+        </div>
+        <button class="btn btn-gh btn-sm" id="btn-logout">Logout</button>
+      </div>
+    </div>
+  </nav>
+  <div id="pages">
+    <div class="wrap">
+      <div class="page active" id="pg-home"></div>
+      <div class="page" id="pg-dashboard"></div>
+      <div class="page" id="pg-billing"></div>
+      <div class="page" id="pg-inventory"></div>
+      <div class="page" id="pg-pricelookup"></div>
+      <div class="page" id="pg-customers"></div>
+      <div class="page" id="pg-pendingloads"></div>
+      <div class="page" id="pg-history"></div>
+      <div class="page" id="pg-settings"></div>
+    </div>
+  </div>
+</div>
+<div id="modal-container"></div>
+
+<script src="js/vendor/supabase.js"></script>
+<script src="js/supabase-config.js?v=20260921-8"></script>
+<script src="js/cloud.js?v=20260921-8"></script>
+<script src="js/products-data.js"></script>
+<script src="js/app.js?v=20260921-8"></script>
+</body>
+</html>
