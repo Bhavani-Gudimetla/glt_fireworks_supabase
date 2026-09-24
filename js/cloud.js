@@ -188,11 +188,11 @@ var GLTCloud = (function () {
     return JSON.stringify(out);
   }
   function productSig(p) {
-    return JSON.stringify([p.name || '', p.category || '', p.uom || '', p.qtyPerCase == null ? null : Number(p.qtyPerCase),
+    return JSON.stringify([p.name || '', p.code || '', p.category || '', p.uom || '', p.qtyPerCase == null ? null : Number(p.qtyPerCase),
                            Number(p.stockCases) || 0, Number(p.stockLoose) || 0, stablePrices(p.prices)]);
   }
   function mapProduct(p) {
-    var o = { _id: pid(p), name: p.name, category: p.category, uom: p.uom, qtyPerCase: p.qtyPerCase,
+    var o = { _id: pid(p), name: p.name, code: p.code, category: p.category, uom: p.uom, qtyPerCase: p.qtyPerCase,
               stockCases: p.stockCases, stockLoose: p.stockLoose, stock: p.stock, prices: p.prices || {} };
     if (profile && profile.role === 'admin') o.costPrice = p.costPrice;
     return o;
@@ -360,7 +360,10 @@ var GLTCloud = (function () {
         var billId = String(bill._id || bill.billNumber || '');
         return rpc('save_bill', { p_bill: bill }).then(function () {
           if (!d.htmlContent) return { status: 'success' };
-          var base = safeName(bill.customerName) + '_' + safeName(bill.billNumber);
+          // The estimate's save time is part of the file name, so every edited version gets its own
+          // link (a reused link would keep showing the old PDF on phones / in WhatsApp's cache).
+          var ver = bill.updatedAt ? new Date(bill.updatedAt).getTime() : Date.now();
+          var base = safeName(bill.customerName) + '_' + safeName(bill.billNumber) + '_' + ver;
           return makePdf(d.htmlContent)
             .then(function (blob) { return uploadPdf('bills/' + safeName(billId) + '/' + base + '.pdf', blob); })
             .then(function (url) { return rpc('set_bill_pdf', { p_bill_id: billId, p_url: url }).then(function () { return { status: 'success', fileUrl: url }; }); })
@@ -371,7 +374,7 @@ var GLTCloud = (function () {
       }
       case 'saveCustomerStatement': {
         var d0 = new Date(), dc = ('0' + d0.getDate()).slice(-2) + ('0' + (d0.getMonth() + 1)).slice(-2) + String(d0.getFullYear()).slice(-2);
-        var fileName = safeName(d.customerName) + '_' + dc + '_Statement.pdf';
+        var fileName = safeName(d.customerName) + '_' + dc + '_' + safeName(d.fileTag || 'Statement') + '.pdf';
         return makePdf(d.htmlContent).then(function (blob) {
           return uploadPdf('statements/' + randomToken() + '/' + fileName, blob);
         }).then(function (url) {

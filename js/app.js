@@ -1,15 +1,35 @@
-/* ==========================================================================
+﻿/* ==========================================================================
    GLT Fireworks - application logic
    (extracted unchanged from the original single-file page; only inline
    style strings were retuned for the new look)
    ========================================================================== */
 // Shown on the Home page so it's easy to tell which copy of the code is running.
 // Keep in step with the ?v= tags in GLT_Fireworks_NEW.html.
-var APP_VERSION='20260921-8';
+var APP_VERSION='20260925-2';
 
 // == STORAGE ==
 function lsGet(k,d){try{var v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch(e){return d;}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
+
+// == PRODUCT CATALOG VERSION ==
+// The product list was replaced by the "GLT 2026" Excel list (with short codes and new price columns).
+// A device that still holds the OLD list must forget it once, before anything syncs, otherwise the old
+// products/prices could be mixed with (or uploaded over) the new ones. The next login downloads the new list.
+var CATALOG_VERSION='excel-2026-09-25b';
+(function(){
+  if(lsGet('catalogVersion','')===CATALOG_VERSION) return;
+  try{
+    localStorage.removeItem('products');
+    localStorage.removeItem('refMap');
+    localStorage.removeItem('cloudSmartSync');
+    // uploads still waiting that belong to the old product list must never reach the new database
+    var box=lsGet('cloudOutbox',[]);
+    if(box.length) localStorage.setItem('cloudOutbox',JSON.stringify(box.filter(function(e){
+      return e.action!=='updateStock'&&e.action!=='updateProduct'&&e.action!=='updateProductPrice'&&e.action!=='addRefPricesToSheet';
+    })));
+  }catch(e){}
+  lsSet('catalogVersion',CATALOG_VERSION);
+})();
 
 // == REFERENCE PRICE LISTS ==
 var REF_MAP = lsGet('refMap', DEFAULT_REF_MAP);
@@ -97,6 +117,47 @@ function getProductQtyFromItems(itemsList, product) {
   return sum;
 }
 function getPrice(p,ref){if(!p||!ref)return null;var v=p.prices[ref];return v!=null?Number(v):null;}
+
+// == COMPANY CODES & SEARCH ==
+// Every product carries its company's 2-3 letter code (AJANTA -> AJN); all products of a company share it.
+// Search works on the code AND the full name: every word typed must appear somewhere in the
+// code / name / category, in any order.  "ajn" lists all AJANTA products, "ajn fp" narrows it down.
+function prodCode(p){return p&&p.code?String(p.code):'';}
+function productFilter(q){
+  var toks=String(q||'').toLowerCase().split(/[^a-z0-9ఀ-౿]+/).filter(Boolean);
+  if(!toks.length) return function(){return true;};
+  return function(p){
+    var hay=((p.name||'')+' '+prodCode(p)+' '+(p.company||'')+' '+(p.category||'')+' '+(p.uom||'')).toLowerCase();
+    for(var i=0;i<toks.length;i++) if(hay.indexOf(toks[i])<0) return false;
+    return true;
+  };
+}
+// Best matches first: products whose code is exactly what was typed, then codes starting with it, then the rest.
+function searchProducts(q,limit){
+  var qc=String(q||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  var ok=productFilter(q), ql=String(q||'').trim().toLowerCase(), found=[];
+  products.forEach(function(p,i){
+    if(!ok(p)) return;
+    var c=prodCode(p).toUpperCase(), score=3;
+    if(qc&&c===qc) score=0;
+    else if(qc&&c.indexOf(qc)===0) score=1;
+    else if(ql&&(p.name||'').toLowerCase().indexOf(ql)===0) score=2;
+    found.push([score,i,p]);
+  });
+  found.sort(function(a,b){return a[0]-b[0]||a[1]-b[1];});
+  return found.slice(0,limit||found.length).map(function(x){return x[2];});
+}
+function codeBadge(code){return code?'<span class="code-badge">'+esc(code)+'</span>':'';}
+// code of a line on an estimate (older estimates did not store it, so look the product up)
+function itemCode(item){
+  if(!item) return '';
+  if(item.productCode) return String(item.productCode);
+  var id=String(item.productId||'').trim(), nm=cleanKey(item.productName), p=null;
+  if(id) p=products.find(function(x){return String(x._id)===id;});
+  if(!p&&nm) p=products.find(function(x){return cleanKey(x.name)===nm;});
+  return prodCode(p);
+}
+function cleanCode(s){return String(s||'').toUpperCase().replace(/[^A-Z]/g,'').slice(0,3);}
 function stockClass(n){return n>=50?'stk-ok':n>0?'stk-low':'stk-out';}
 function stockLabel(n){return n>=50?fmtNum(n)+' in stock':n>0?fmtNum(n)+' low!':n<0?fmtNum(n)+' oversold!':'No stock';}
 function todayDisp(){var d=new Date();return pad(d.getDate())+'-'+pad(d.getMonth()+1)+'-'+d.getFullYear();}
@@ -120,7 +181,7 @@ var T={
   en:{welcome:'Welcome back',home:'Home',dashboard:'Dashboard',billing:'New Estimate',inventory:'Inventory',priceLookupNav:'Price Lookup',customersNav:'Customers',pendingLoadsNav:'Pending Loads',history:'Estimate History',settings:'Settings',
     totalProds:'Products',totalStock:'Stock',lowStock:'Low Stock',todayBills:"Today's Estimates",todayRev:"Today's Revenue",
     newBill:'Create New Estimate',customer:'Customer',refNum:'Reference No.',
-    searchProd:'Type product name or company...',
+    searchProd:'Type product code or name...',
     addItem:'Add to Estimate',cases:'No. of Cases',loose:'Loose Qty',
     price:'Price',stock:'Stock',grandTotal:'GRAND TOTAL',saveBill:'Save & Print Estimate',
     delete:'Delete',print:'Print',pdf:'Download PDF',addProd:'Add Product',editProd:'Edit Product',
@@ -132,7 +193,7 @@ var T={
   te:{welcome:'తిరిగి స్వాగతం',home:'హోమ్',dashboard:'డ్యాష్‌బోర్డ్',billing:'కొత్త ఎస్టిమేట్',inventory:'స్టాక్',priceLookupNav:'ధర శోధన',customersNav:'కస్టమర్లు',pendingLoadsNav:'పెండింగ్ లోడ్స్',history:'ఎస్టిమేట్ చరిత్ర',settings:'సెట్టింగ్స్',
     totalProds:'వస్తువులు',totalStock:'స్టాక్',lowStock:'తక్కువ స్టాక్',todayBills:'ఈరోజు ఎస్టిమేట్లు',todayRev:'ఈరోజు ఆదాయం',
     newBill:'కొత్త ఎస్టిమేట్ చేయి',customer:'కస్టమర్',refNum:'రెఫరెన్స్ నం.',
-    searchProd:'వస్తువు పేరు టైప్ చేయండి...',
+    searchProd:'కోడ్ లేదా వస్తువు పేరు టైప్ చేయండి...',
     addItem:'జోడించు',cases:'పెట్టెల సంఖ్య',loose:'వదులు పరిమాణం',
     price:'ధర',stock:'స్టాక్',grandTotal:'మొత్తం',saveBill:'సేవ్ & ప్రింట్',
     delete:'తొలగించు',print:'ప్రింట్',pdf:'PDF',addProd:'వస్తువు జోడించు',editProd:'వస్తువు సవరించు',
@@ -378,11 +439,12 @@ function mergeServerData(d, includeBills) {
       // App wins for stock levels (stockCases/stockLoose/stock) unless the cloud has newer data
       return Object.assign({}, lp, {
         name:       rp.name       || lp.name,        // ← cloud name wins (spelling fixes)
+        code:       rp.code       || lp.code,
         company:    rp.company    || lp.company,
         category:   rp.category   || lp.category,
         uom:        rp.uom        || lp.uom,
         qtyPerCase: rp.qtyPerCase != null ? rp.qtyPerCase : lp.qtyPerCase,
-        costPrice:  rp.costPrice  != null ? rp.costPrice  : lp.costPrice,
+        costPrice:  userRole !== 'admin' ? undefined : (rp.costPrice != null ? rp.costPrice : lp.costPrice),
         // Stock: the cloud value is used
         // (app may have live deductions not yet uploaded)
         stockCases: rp.stockCases != null ? rp.stockCases : lp.stockCases,
@@ -459,6 +521,12 @@ function enterApp(profile) {
   lsSet('currentUser', profile.username);
   lsSet('userRole', userRole);
   lsSet('auth', true);
+  // Cost prices are for admins only. If this device was used by an admin earlier, their cost prices are
+  // still stored here, so an employee login removes them.
+  if (userRole !== 'admin' && products.some(function(p) { return p.costPrice != null; })) {
+    products.forEach(function(p) { delete p.costPrice; });
+    saveAll();
+  }
   document.getElementById('login-page').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   document.getElementById('user-role-badge').innerText = userRole.toUpperCase();
@@ -825,12 +893,28 @@ function initDashboardChart() {
   });
 }
 
+// First 4 letters of the customer's first name, plus one letter of the surname
+// (if there is one) — e.g. "Mani" -> "mani", "Jahnavi S" -> "jahn_S".
+function billNamePrefix(name) {
+  var words = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return '';
+  var lettersOnly = function(w) { return w.replace(/[^a-zA-Z]/g, ''); };
+  var first = lettersOnly(words[0]).slice(0, 4).toLowerCase();
+  if (!first) return '';
+  if (words.length > 1) {
+    var surnameLetter = lettersOnly(words[1]).slice(0, 1).toUpperCase();
+    if (surnameLetter) return first + '_' + surnameLetter;
+  }
+  return first;
+}
+
 function getBillNum(){
   if (window._editingOriginalBill && window._editingOriginalBill.billNumber) {
     return window._editingOriginalBill.billNumber;
   }
   var u = (typeof curUser !== 'undefined' && curUser && curUser.username) ? curUser.username.slice(0, 3).toUpperCase() : 'USR';
   var code = todayCode();
+  var namePrefix = billNamePrefix(billCustomer);
   // next number = highest number used today (by anyone, on any device we know of) + 1.
   // The estimate being drafted right now is left out, so its own number stays stable.
   var draftId = window._activeDraftBillId ? String(window._activeDraftBillId) : '';
@@ -838,11 +922,39 @@ function getBillNum(){
   bills.forEach(function(b) {
     if (!b.billNumber) return;
     if (draftId && String(b._id) === draftId) return;
-    var m = /^(\d{6})_[^_]+_(\d+)$/.exec(String(b.billNumber));
+    // matches both the old "code_user_seq" numbers and the new "name_code_user_seq" ones
+    var m = /(?:^|_)(\d{6})_[^_]+_(\d+)$/.exec(String(b.billNumber));
     if (m && m[1] === code) highest = Math.max(highest, parseInt(m[2], 10));
   });
-  return code + '_' + u + '_' + String(highest + 1).padStart(3, '0');
+  var seq = String(highest + 1).padStart(3, '0');
+  return (namePrefix ? namePrefix + '_' : '') + code + '_' + u + '_' + seq;
 }
+
+// Replaces the old confirm() dialog (which only offered browser-fixed "OK"/"Cancel"
+// labels) with a modal that spells out what each button actually does.
+// cb(true) = save to price list & upload to the cloud, cb(false) = this bill only.
+function askUpdateMasterPrice(productName, price, refName, cb) {
+  window._priceModalCb = cb;
+  showModal(
+    '<div class="modal" style="max-width:440px">'+
+    '<div class="modal-hdr"><span class="modal-title">&#128176; Update Master Price List?</span><button class="modal-x" onclick="window._priceModalAnswer(false)">&#10005;</button></div>'+
+    '<div class="modal-body">'+
+      '<div class="fg"><span class="lbl">Product</span><div style="font-weight:700;font-size:15px">'+esc(productName)+'</div></div>'+
+      '<div class="fg"><span class="lbl">New Price</span><div style="font-weight:700;font-size:15px">&#8377;'+price+'</div></div>'+
+      '<div class="fg"><span class="lbl">Reference</span><div style="font-weight:700;font-size:15px">'+esc(refName)+'</div></div>'+
+    '</div>'+
+    '<div class="modal-ftr">'+
+      '<button class="btn btn-r" onclick="window._priceModalAnswer(false)">Add to this bill only</button>'+
+      '<button class="btn btn-r" onclick="window._priceModalAnswer(true)">Add to both cloud and this bill</button>'+
+    '</div></div>'
+  );
+}
+window._priceModalAnswer = function(updateMaster) {
+  var cb = window._priceModalCb;
+  window._priceModalCb = null;
+  closeModal();
+  if (cb) cb(updateMaster);
+};
 
 function promptEditItemPrice(i) {
   var item = billItems[i];
@@ -880,61 +992,61 @@ function continueEditItemPrice(i) {
   var refName = REF_MAP[targetRef] || ('Ref #' + targetRef);
 
   // Ask user if price should be saved to master price list
-  var updateMaster = confirm('Update master price list?\n\nProduct: ' + item.productName + '\nNew Price: Rs.' + newPrice + '\nReference: ' + refName + '\n\nOK = Save to price list & upload to the cloud\nCancel = Apply to this bill only');
+  askUpdateMasterPrice(item.productName, newPrice, refName, function(updateMaster) {
+    // 1. Find product in products catalog using 4-way matching rule
+    var pIdx = products.findIndex(function(p) {
+      var pId = String(p._id || p.id || '').trim();
+      var iId = String(item.productId || '').trim();
+      var pName = cleanKey(p.name);
+      var iName = cleanKey(item.productName);
+      return (pId && iId && pId === iId) ||
+             (pName && iName && pName === iName) ||
+             (pName && iName && (pName.endsWith(iName) || iName.endsWith(pName)));
+    });
 
-  // 1. Find product in products catalog using 4-way matching rule
-  var pIdx = products.findIndex(function(p) {
-    var pId = String(p._id || p.id || '').trim();
-    var iId = String(item.productId || '').trim();
-    var pName = cleanKey(p.name);
-    var iName = cleanKey(item.productName);
-    return (pId && iId && pId === iId) ||
-           (pName && iName && pName === iName) ||
-           (pName && iName && (pName.endsWith(iName) || iName.endsWith(pName)));
-  });
+    if (updateMaster && pIdx >= 0) {
+      var prod = products[pIdx];
+      if (!prod.prices) prod.prices = {};
+      prod.prices[targetRef] = newPrice;
 
-  if (updateMaster && pIdx >= 0) {
-    var prod = products[pIdx];
-    if (!prod.prices) prod.prices = {};
-    prod.prices[targetRef] = newPrice;
+      // Link productId if missing
+      item.productId = prod._id || prod.id || item.productId;
 
-    // Link productId if missing
-    item.productId = prod._id || prod.id || item.productId;
-
-    // 2. Update in ALL_PRODUCTS array if present
-    if (typeof ALL_PRODUCTS !== 'undefined' && Array.isArray(ALL_PRODUCTS)) {
-      var apIdx = ALL_PRODUCTS.findIndex(function(x) {
-        var xId = String(x._id || x.id || '').trim();
-        var xName = cleanKey(x.name);
-        return (xId && prod._id && xId === String(prod._id)) || (xName && cleanKey(prod.name) && xName === cleanKey(prod.name));
-      });
-      if (apIdx >= 0) {
-        if (!ALL_PRODUCTS[apIdx].prices) ALL_PRODUCTS[apIdx].prices = {};
-        ALL_PRODUCTS[apIdx].prices[targetRef] = newPrice;
+      // 2. Update in ALL_PRODUCTS array if present
+      if (typeof ALL_PRODUCTS !== 'undefined' && Array.isArray(ALL_PRODUCTS)) {
+        var apIdx = ALL_PRODUCTS.findIndex(function(x) {
+          var xId = String(x._id || x.id || '').trim();
+          var xName = cleanKey(x.name);
+          return (xId && prod._id && xId === String(prod._id)) || (xName && cleanKey(prod.name) && xName === cleanKey(prod.name));
+        });
+        if (apIdx >= 0) {
+          if (!ALL_PRODUCTS[apIdx].prices) ALL_PRODUCTS[apIdx].prices = {};
+          ALL_PRODUCTS[apIdx].prices[targetRef] = newPrice;
+        }
       }
     }
-  }
 
-  saveAll();
-  onBillItemsChanged();
-  renderBilling();
-
-  if (updateMaster) {
     saveAll();
-    toast('&#9989; Price &#8377;' + newPrice + ' saved to ' + refName + ' & synced to the cloud!', 'ok');
-    if (cloudOn()) {
-      apiCall('updateProductPrice', {
-        productId: item.productId || (pIdx >= 0 ? products[pIdx]._id : ''),
-        productName: item.productName,
-        refId: targetRef,
-        price: newPrice
-      }, function(res) {
-        if (res.status !== 'success') toast('Cloud sync failed: ' + (res.message||''), 'err');
-      });
+    onBillItemsChanged();
+    renderBilling();
+
+    if (updateMaster) {
+      saveAll();
+      toast('&#9989; Price &#8377;' + newPrice + ' saved to ' + refName + ' & synced to the cloud!', 'ok');
+      if (cloudOn()) {
+        apiCall('updateProductPrice', {
+          productId: item.productId || (pIdx >= 0 ? products[pIdx]._id : ''),
+          productName: item.productName,
+          refId: targetRef,
+          price: newPrice
+        }, function(res) {
+          if (res.status !== 'success') toast('Cloud sync failed: ' + (res.message||''), 'err');
+        });
+      }
+    } else {
+      toast('&#9989; Price &#8377;' + newPrice + ' applied to this bill only.', 'ok');
     }
-  } else {
-    toast('&#9989; Price &#8377;' + newPrice + ' applied to this bill only.', 'ok');
-  }
+  });
 }
 
 function buildBillItemsTableOnly(){
@@ -942,7 +1054,7 @@ function buildBillItemsTableOnly(){
   var totalCases = billItems.reduce(function(s,i){return s+(i.cases||0);},0);
   var q = (billItemSearch||'').trim().toLowerCase();
   var visibleIdx = billItems.map(function(item,i){return i;}).filter(function(i){
-    return !q || billItems[i].productName.toLowerCase().indexOf(q)>=0;
+    return !q || billItems[i].productName.toLowerCase().indexOf(q)>=0 || itemCode(billItems[i]).toLowerCase().indexOf(q)>=0;
   });
 
   // Common cell style with vertical border
@@ -961,10 +1073,13 @@ function buildBillItemsTableOnly(){
     var casesInp = '<input type="number" data-f="cases" min="0" step="0.5" value="'+(item.cases||0)+
       '" style="width:62px;'+inp+inpBdr+'" onchange="updateItemCases('+i+',this.value)" title="Cases ordered">';
 
-    // QPC cell — editable, shows item QPC or blank
-    var qpcVal  = qpc > 0 ? qpc : '';
+    // QPC cell — editable, shows item QPC or blank.
+    // Only flagged red when cases were used to order but qty/case is missing —
+    // not when the order was entered directly as a quantity (cases left at 0).
+    var qpcVal    = qpc > 0 ? qpc : '';
+    var qpcNeeded = !qpc && (item.cases || 0) > 0;
     var qpcInp  = '<input type="number" data-f="qpc" min="0" value="'+qpcVal+
-      '" placeholder="—" style="width:60px;'+inp+(qpc?inpBdr:inpRed)+
+      '" placeholder="—" style="width:60px;'+inp+(qpcNeeded?inpRed:inpBdr)+
       '" onchange="updateItemQpc('+i+',this.value)" title="Qty per case — edit if not set">';
 
     // Order Qty — editable, red border if blank
@@ -977,12 +1092,12 @@ function buildBillItemsTableOnly(){
       ? '<span style="cursor:pointer;font-weight:700;color:var(--blue-text);font-size:14px;white-space:nowrap" onclick="promptEditItemPrice('+i+')" title="Click to edit (password)">&#8377;'+item.sellingPrice+' &#9999;</span>'
       : '<input type="number" data-f="price" min="0" step="0.01" placeholder="Price" value="" style="width:92px;'+inp+inpRed+'" onchange="updateItemPrice('+i+',this.value)">';
 
-    // Amount
-    var amtCell = '<span style="font-weight:800;font-size:14px;white-space:nowrap">'+fmtMoney(item.totalAmount)+'</span>';
+    // Amount — flagged red when it's ₹0 (price not yet set, or qty is 0)
+    var amtCell = '<span style="font-weight:800;font-size:14px;white-space:nowrap'+(!item.totalAmount?';color:var(--red-text)':'')+'">'+fmtMoney(item.totalAmount)+'</span>';
 
     return '<tr data-idx="'+i+'" style="border-bottom:1px solid var(--card-border)">'+
       '<td style="'+tdBorder+'color:var(--text-muted);font-size:13px;padding:10px 4px;text-align:center">'+(i+1)+'</td>'+
-      '<td style="'+tdBorder+'font-weight:700;font-size:14px;padding:10px 10px;min-width:150px;max-width:260px;word-break:break-word">'+esc(item.productName)+'</td>'+
+      '<td style="'+tdBorder+'font-weight:700;font-size:14px;padding:10px 10px;min-width:150px;max-width:260px;word-break:break-word">'+codeBadge(itemCode(item))+esc(item.productName)+'</td>'+
       '<td style="'+tdBorder+'padding:6px 4px;text-align:center">'+casesInp+'</td>'+
       '<td style="'+tdBorder+'padding:6px 4px;text-align:center">'+qpcInp+'</td>'+
       '<td style="'+tdBorder+'padding:6px 4px;text-align:center">'+qtyInp+'</td>'+
@@ -1143,23 +1258,44 @@ function wireBilling(){
   custInp.addEventListener('focus',function(){buildCustDdl(custDdl,custInp.value);});
   custInp.addEventListener('blur',function(){setTimeout(function(){custDdl.classList.remove('open');},200);});
   refSel.addEventListener('change',function(){updateBillReference(refSel.value);});
+  var hl=0;   // which dropdown row is highlighted (Enter picks it)
+  function paintHl(){
+    var rows=prodDdl.querySelectorAll('.ddi');
+    rows.forEach(function(r,i){r.classList.toggle('ddi-hl',i===hl);});
+    if(rows[hl]&&rows[hl].scrollIntoView) rows[hl].scrollIntoView({block:'nearest'});
+  }
   srch.addEventListener('input',function(){
     var q=srch.value.trim();
     if(q.length<2){prodDdl.classList.remove('open');return;}
-    var ql=q.toLowerCase();
-    var res=products.filter(function(p){return (p.name||'').toLowerCase().indexOf(ql)>=0||(p.company||'').toLowerCase().indexOf(ql)>=0||(p.category||'').toLowerCase().indexOf(ql)>=0||(p.uom||'').toLowerCase().indexOf(ql)>=0;}).slice(0,18);
-    if(!res.length){prodDdl.classList.remove('open');return;}
+    var all=searchProducts(q);
+    var res=all.slice(0,60);
+    if(!res.length){
+      prodDdl.innerHTML='<div class="ddi" style="color:var(--text-muted)">No product matches "'+esc(q)+'"</div>';
+      prodDdl.classList.add('open');hl=-1;return;
+    }
     prodDdl.innerHTML=res.map(function(p){
       var pr=getPrice(p,billRef);
       var st=((p.stock||0) - (reservationTotals[p._id]||0));
-      return '<div class="ddi" onmousedown="selectBillProd(\''+encodeURIComponent(p.name)+'\')">'+
+      return '<div class="ddi" onmousedown="selectBillProd(\''+encodeURIComponent(String(p._id))+'\')">'+
         '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'+
-          '<div><div class="mt">'+esc(p.name)+'</div><div class="st">'+esc(p.uom)+(p.qtyPerCase?' &middot; '+p.qtyPerCase+'/case':'')+' &middot; '+esc(p.category)+'</div>'+(p.qtyPerCase&&(p.stockCases||p.stockLoose)?'<div style="font-size:12px;color:var(--text-muted)">'+(p.stockCases||0)+'cs &times; '+p.qtyPerCase+(p.stockLoose?' + '+p.stockLoose+'L':'')+' = '+st+'</div>':'')+ '</div>'+
+          '<div>'+'<div class="mt">'+codeBadge(prodCode(p))+esc(p.name)+'</div><div class="st">'+esc(p.uom)+(p.qtyPerCase?' &middot; '+p.qtyPerCase+'/case':'')+' &middot; '+esc(p.category)+'</div>'+(p.qtyPerCase&&(p.stockCases||p.stockLoose)?'<div style="font-size:12px;color:var(--text-muted)">'+(p.stockCases||0)+'cs &times; '+p.qtyPerCase+(p.stockLoose?' + '+p.stockLoose+'L':'')+' = '+st+'</div>':'')+ '</div>'+
           '<div style="text-align:right;flex-shrink:0">'+(pr?'<div style="color:var(--red-text);font-weight:800;font-size:15px">&#8377;'+pr+'</div>':'<div style="color:var(--text-muted);font-size:13px">No price</div>')+
           '<span class="'+stockClass(st)+'">'+stockLabel(st)+'</span></div>'+
         '</div></div>';
-    }).join('');
+    }).join('')+(all.length>res.length?'<div class="ddi" style="color:var(--text-muted);font-size:13px">+ '+(all.length-res.length)+' more - type a few more letters of the item name to narrow it down</div>':'');
     prodDdl.classList.add('open');
+    hl=0;paintHl();
+  });
+  srch.addEventListener('keydown',function(e){
+    var rows=prodDdl.querySelectorAll('.ddi[onmousedown]');
+    if(!prodDdl.classList.contains('open')||!rows.length) return;
+    if(e.key==='ArrowDown'){e.preventDefault();hl=Math.min(rows.length-1,hl+1);paintHl();}
+    else if(e.key==='ArrowUp'){e.preventDefault();hl=Math.max(0,hl-1);paintHl();}
+    else if(e.key==='Enter'){
+      e.preventDefault();
+      var pick=rows[Math.max(0,hl)];
+      if(pick){var m=/selectBillProd\('([^']*)'\)/.exec(pick.getAttribute('onmousedown')||'');if(m)selectBillProd(m[1]);}
+    }
   });
   srch.addEventListener('blur',function(){setTimeout(function(){prodDdl.classList.remove('open');},200);});
 }
@@ -1194,13 +1330,16 @@ function selectBillProd(id){
   // id is either a product name (encoded) or _id — try name first, then _id
   var decoded = '';
   try { decoded = decodeURIComponent(id); } catch(e) { decoded = id; }
-  selectedProduct = products.find(function(p){ return p.name === decoded; }) ||
-                    products.find(function(p){ return String(p._id) === String(id); }) ||
+  selectedProduct = products.find(function(p){ return String(p._id) === decoded; }) ||
+                    products.find(function(p){ return p.name === decoded; }) ||
                     null;
   var s=document.getElementById('b-search');
-  if(s&&selectedProduct)s.value=selectedProduct.name;
+  if(s&&selectedProduct)s.value=(prodCode(selectedProduct)?prodCode(selectedProduct)+' - ':'')+selectedProduct.name;
   document.getElementById('b-prod-ddl').classList.remove('open');
   renderSelProd();
+  // keyboard flow: code + Enter, then type the cases and press Enter to add the line
+  var ci=document.getElementById('inp-cases')||document.getElementById('inp-loose');
+  if(ci) ci.focus();
 }
 
 function renderSelProd(){
@@ -1228,7 +1367,7 @@ function renderSelProd(){
   }
   el.innerHTML='<div class="sel-prod">'+
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:12px">'+
-      '<div><div style="font-weight:700;font-size:16px">'+esc(p.name)+'</div><div style="font-size:14px;color:var(--gy);margin-top:2px">'+esc(p.uom)+(p.qtyPerCase?' &middot; '+p.qtyPerCase+' per case':'')+' &middot; '+esc(p.category)+'</div></div>'+
+      '<div><div style="font-weight:700;font-size:16px">'+codeBadge(prodCode(p))+esc(p.name)+'</div><div style="font-size:14px;color:var(--gy);margin-top:2px">'+esc(p.uom)+(p.qtyPerCase?' &middot; '+p.qtyPerCase+' per case':'')+' &middot; '+esc(p.category)+'</div></div>'+
       '<div style="text-align:right">'+priceHtml+'<span class="'+stockClass(st)+'" style="margin-top:4px;display:inline-block">&#128230; '+fmtNum(st)+' '+esc(p.uom)+'</span>'+(p.qtyPerCase?'<div style="font-size:12px;color:var(--gy);margin-top:2px">'+(p.stockCases||0)+'cs &times; '+p.qtyPerCase+(p.stockLoose?' + '+p.stockLoose+' loose':'')+'</div>':'')+'</div>'+
     '</div>'+
     '<div class="qty-toggle">'+
@@ -1239,6 +1378,10 @@ function renderSelProd(){
     '<div id="calc-prev"></div>'+
     '<button class="btn btn-g btn-xl" style="margin-top:10px" onclick="addBillItem()">&#10010; '+t('addItem')+(price?'':' (set price after)')+'</button>'+
   '</div>';
+  ['inp-cases','inp-loose'].forEach(function(id){
+    var x=document.getElementById(id);
+    if(x) x.onkeydown=function(e){if(e.key==='Enter'){e.preventDefault();addBillItem();}};
+  });
 }
 
 function setQtyMode(m){qtyMode=m;renderSelProd();}
@@ -1344,6 +1487,7 @@ function addBillItem(){
   billItems.push({
     productId:   p._id,
     productName: p.name,
+    productCode: prodCode(p),
     uom:         p.uom || 'BOX',
     cases:       cases2,
     qtyPerCase:  p.qtyPerCase || 0,
@@ -1371,6 +1515,9 @@ function addBillItem(){
     renderBilling();
   }
   scrollToLatestBillItem();
+  // ready for the next product: clear the search box and put the cursor back in it
+  var sb=document.getElementById('b-search');
+  if(sb){sb.value='';if(!('ontouchstart' in window))sb.focus({preventScroll:true});}
 }
 
 function scrollToLatestBillItem(){
@@ -1500,38 +1647,44 @@ function updateItemPrice(i, val) {
   // Ask user if price should update the master price list
   if (price > 0) {
     var refName2 = REF_MAP[targetRef] || ('Ref #' + targetRef);
-    var updateMaster2 = confirm('Update master price list?\n\nProduct: ' + item.productName + '\nNew Price: Rs.' + price + '\nReference: ' + refName2 + '\n\nOK = Save to price list & upload to the cloud\nCancel = Apply to this bill only');
-    if (updateMaster2) {
-      if (pIdx >= 0) {
-        if (!products[pIdx].prices) products[pIdx].prices = {};
-        products[pIdx].prices[targetRef] = price;
-      }
-      saveAll();
-      if (cloudOn()) {
-        apiCall('updateProductPrice', {
-          productId:   item.productId || (pIdx >= 0 ? products[pIdx]._id : ''),
-          productName: item.productName,
-          refId:       targetRef,
-          price:       price
-        }, function(res) {
-          if (res.status === 'success') {
-            toast('\u2705 Price \u20B9' + price + ' saved to ' + refName2 + ' & synced to the cloud!', 'ok');
-          } else {
-            toast('Price saved to catalog. Cloud sync failed: ' + (res.message||''), 'err');
-          }
-        });
+    askUpdateMasterPrice(item.productName, price, refName2, function(updateMaster2) {
+      if (updateMaster2) {
+        if (pIdx >= 0) {
+          if (!products[pIdx].prices) products[pIdx].prices = {};
+          products[pIdx].prices[targetRef] = price;
+        }
+        saveAll();
+        if (cloudOn()) {
+          apiCall('updateProductPrice', {
+            productId:   item.productId || (pIdx >= 0 ? products[pIdx]._id : ''),
+            productName: item.productName,
+            refId:       targetRef,
+            price:       price
+          }, function(res) {
+            if (res.status === 'success') {
+              toast('\u2705 Price \u20B9' + price + ' saved to ' + refName2 + ' & synced to the cloud!', 'ok');
+            } else {
+              toast('Price saved to catalog. Cloud sync failed: ' + (res.message||''), 'err');
+            }
+          });
+        } else {
+          toast('\u2705 Price \u20B9' + price + ' saved to catalog!', 'ok');
+        }
       } else {
-        toast('\u2705 Price \u20B9' + price + ' saved to catalog!', 'ok');
+        toast('\u2705 Price \u20B9' + price + ' applied to this bill only.', 'ok');
       }
-    } else {
-      toast('\u2705 Price \u20B9' + price + ' applied to this bill only.', 'ok');
-    }
-  }
 
-  // Re-render bill table
-  var w = document.getElementById('bi-table-wrap');
-  if (w) w.innerHTML = buildBillItemsTableOnly();
-  wireBillItemSearch();
+      // Re-render bill table
+      var w = document.getElementById('bi-table-wrap');
+      if (w) w.innerHTML = buildBillItemsTableOnly();
+      wireBillItemSearch();
+    });
+  } else {
+    // Re-render bill table
+    var w = document.getElementById('bi-table-wrap');
+    if (w) w.innerHTML = buildBillItemsTableOnly();
+    wireBillItemSearch();
+  }
 }
 
 function updateItemCases(i, val) {
@@ -1901,17 +2054,22 @@ function cancelEdit(){
 function buildBillPreviewRows(bill, filterQ){
   var q=(filterQ||'').trim().toLowerCase();
   var items=bill.items||[];
-  var visible=items.filter(function(item){return !q || item.productName.toLowerCase().indexOf(q)>=0;});
+  var visible=items.filter(function(item){return !q || item.productName.toLowerCase().indexOf(q)>=0 || itemCode(item).toLowerCase().indexOf(q)>=0;});
   var rows=visible.map(function(item){
     var i=items.indexOf(item);
     var loaded=item.qtyLoaded!=null?item.qtyLoaded:0;
-    var pending=item.qtyPending!=null?item.qtyPending:(item.totalQty-loaded);
-    var pendStyle=pending>0?'style="color:var(--red-text);font-weight:800"':'style="color:var(--green-text);font-weight:700"';
-    return '<tr><td>'+(i+1)+'</td><td style="font-weight:700;font-size:14px">'+esc(item.productName)+'</td>'+
+    // Same red/blue/green rule as the live billing table's Loaded/Pending columns
+    // (item.qtyPending is clamped at 0 and can't show an over-load, so recompute the diff here)
+    var diff=Math.round((loaded-(Number(item.totalQty)||0))*1000)/1000;
+    var diffColor=diff===0?'var(--green-text)':(diff>0?'var(--red-text)':'var(--blue-text)');
+    var diffText=diff>0?'+'+diff:String(diff);
+    var priceStyle=item.sellingPrice?'':' style="color:var(--red-text);font-weight:700"';
+    var amtStyle=item.totalAmount?'':' style="color:var(--red-text);font-weight:700"';
+    return '<tr><td>'+(i+1)+'</td><td style="font-weight:700;font-size:14px">'+codeBadge(itemCode(item))+esc(item.productName)+'</td>'+
       '<td>'+(item.cases||'—')+'</td><td><strong>'+item.totalQty+'</strong></td>'+
-      '<td>'+esc(item.uom)+'</td><td>&#8377;'+item.sellingPrice+'</td><td class="num">'+fmtMoney(item.totalAmount)+'</td>'+
-      '<td style="text-align:center;font-weight:700;color:var(--sky-text)">'+loaded+'</td>'+
-      '<td '+pendStyle+'>'+(pending>0?'⚠ ':'')+pending+'</td></tr>';
+      '<td>'+esc(item.uom)+'</td><td'+priceStyle+'>&#8377;'+item.sellingPrice+'</td><td class="num"'+amtStyle+'>'+fmtMoney(item.totalAmount)+'</td>'+
+      '<td style="text-align:center;font-weight:700;color:'+diffColor+'">'+loaded+'</td>'+
+      '<td style="color:'+diffColor+';font-weight:800">'+diffText+'</td></tr>';
   }).join('');
   var countNote=q?'<div style="font-size:13.5px;color:var(--text-muted);margin-bottom:8px">Showing '+visible.length+' of '+items.length+' items</div>':'';
   var noMatch='<div class="empty" style="padding:16px"><div class="empty-txt">No items match "'+esc(filterQ)+'"</div></div>';
@@ -2035,11 +2193,28 @@ function printCustomerStatement(id){
 // Generates the statement PDF via the backend (uploaded to cloud storage, link made
 // shareable) and opens WhatsApp with that link pre-filled — same pattern as
 // sharing a bill's PDF, just for a customer's consolidated statement.
+// Browsers only allow a new tab straight after a click, but the PDF takes seconds to
+// build. So the WhatsApp tab is opened immediately (blank) and pointed at the message
+// once the PDF link is ready.
+function waOpener(){
+  var w=null;
+  try{w=window.open('','_blank');}catch(e){}
+  if(w){try{w.document.write('<p style="font-family:Arial,sans-serif;padding:24px">Preparing PDF link&hellip;</p>');}catch(e){}}
+  return {
+    send:function(msg){
+      var url='https://wa.me/?text='+encodeURIComponent(msg);
+      if(w&&!w.closed)w.location.href=url; else window.open(url,'_blank');
+    },
+    cancel:function(){ if(w&&!w.closed)w.close(); }
+  };
+}
+
 function shareCustomerStatementWhatsApp(id){
   var customer=customers.find(function(c){return String(c._id)===String(id);});
   if(!customer){toast('Customer not found','err');return;}
   var stats=buildCustomerStats(customer);
   var htmlContent=buildCustomerStatementHTML(customer,stats);
+  var wa=waOpener();
   toast('Generating statement PDF...','info');
   apiCall('saveCustomerStatement',{customerName:customer.name,htmlContent:htmlContent},function(res){
     if(res && res.status==='success' && res.fileUrl){
@@ -2050,8 +2225,9 @@ function shareCustomerStatementWhatsApp(id){
         'Advance Paid: '+fmtMoney(stats.advancePaid)+'\n'+
         'Balance Due: '+fmtMoney(stats.balanceDue)+'\n\n'+
         'View / Download PDF:\n'+res.fileUrl;
-      window.open('https://wa.me/?text='+encodeURIComponent(msg),'_blank');
+      wa.send(msg);
     }else{
+      wa.cancel();
       toast('Failed to generate statement PDF: '+(res&&res.message?res.message:'unknown error'),'err');
     }
   });
@@ -2060,16 +2236,24 @@ function shareCustomerStatementWhatsApp(id){
 function buildBillHTML(bill){
   var rows=(bill.items||[]).map(function(item,i){
     var loaded=item.qtyLoaded!=null?item.qtyLoaded:0;
-    var pending=item.qtyPending!=null?item.qtyPending:(item.totalQty-loaded);
-    var pendColor=pending>0?'#dc2626':'#16a34a';
+    // Same red(over)/blue(under)/green(exact) rule as the on-screen billing table and
+    // the View Estimate modal — recomputed from loaded vs. ordered qty so an over-load
+    // shows its real amount instead of being clamped to 0.
+    var diff=Math.round((loaded-(Number(item.totalQty)||0))*1000)/1000;
+    var pendColor=diff===0?'#16a34a':(diff>0?'#dc2626':'#2563eb');
+    var pendIcon=diff>0?'&#9650; ':(diff<0?'&#9888; ':'');
+    var pendText=diff>0?'+'+diff:String(diff);
+    // Cases only apply when the order was made by the case — if it was ordered as a
+    // plain quantity (no cases), qty/case is meaningless and stays blank.
+    var qpcCell=item.cases?(item.qtyPerCase||'—'):'—';
     return '<tr style="background:'+(i%2?'#fefcfc':'#fff')+'">'+
-      '<td>'+(i+1)+'</td><td><strong>'+esc(item.productName)+'</strong></td>'+
-      '<td>'+(item.cases||'—')+'</td><td>'+(item.qtyPerCase||'—')+'</td>'+
+      '<td>'+(i+1)+'</td><td>'+(itemCode(item)?'<div style="font-size:11px;font-weight:800;color:#dc2626;letter-spacing:.5px">'+esc(itemCode(item))+'</div>':'')+'<strong>'+esc(item.productName)+'</strong></td>'+
+      '<td>'+(item.cases||'—')+'</td><td>'+qpcCell+'</td>'+
       '<td><strong>'+item.totalQty+'</strong></td><td>'+esc(item.uom)+'</td>'+
       '<td>&#8377;'+item.sellingPrice+'</td>'+
       '<td style="font-weight:700;text-align:right">&#8377;'+Number(item.totalAmount).toLocaleString('en-IN',{minimumFractionDigits:2})+'</td>'+
-      '<td style="font-weight:700;text-align:center;color:#0284c7">'+loaded+'</td>'+
-      '<td style="font-weight:700;text-align:center;color:'+pendColor+'">'+(pending>0?'⚠ ':'')+pending+'</td></tr>';
+      '<td style="font-weight:700;text-align:center;color:'+pendColor+'">'+loaded+'</td>'+
+      '<td style="font-weight:700;text-align:center;color:'+pendColor+'">'+pendIcon+pendText+'</td></tr>';
   }).join('');
   return '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;padding:20px;color:#000}.hdr{background:#dc2626;color:#fff;padding:14px;text-align:center;border-radius:8px 8px 0 0;margin-bottom:10px}.hdr h1{font-size:22px;margin-bottom:2px}.hdr p{font-size:11px}.meta{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px}.mb{background:#fef2f2;border:1px solid #fca5a5;padding:8px;border-radius:6px}.mb label{display:block;font-size:9px;font-weight:700;color:#7f1d1d;text-transform:uppercase}.mb span{font-size:13px;font-weight:700}table{width:100%;border-collapse:collapse}th{background:#dc2626;color:#fff;padding:7px 6px;text-align:left;font-size:11px}td{padding:5px 6px;border-bottom:1px solid #f3f4f6;font-size:11px}.tot{background:#fef9c3;font-weight:700;font-size:13px}.ftr{margin-top:16px;border-top:1px solid #ccc;padding-top:10px;display:flex;justify-content:space-between}@media print{body{padding:0}}</style></head><body>'+
     '<div class="hdr"><h1>GLT FIREWORKS</h1><p>Gollagunta | Wholesale &amp; Retail Fireworks</p><p style="margin-top:4px;font-size:12px;font-weight:700">Contact: Sai Reddy, 9440116712</p></div>'+
@@ -2080,7 +2264,7 @@ function buildBillHTML(bill){
 
     '</div>'+
     '<table><thead><tr><th>#</th><th>ITEM</th><th>CASES</th><th>QTY/CASE</th><th>TOTAL QTY</th><th>UOM</th><th>PRICE</th><th>AMOUNT</th><th>LOADED</th><th>PENDING</th></tr></thead>'+
-    '<tbody>'+rows+'<tr class="tot"><td colspan="4">Cases: '+(bill.totalCases||0)+'</td><td colspan="4">GRAND TOTAL</td><td style="text-align:right" colspan="2">&#8377;'+Number(bill.totalAmount||0).toLocaleString('en-IN',{minimumFractionDigits:2})+'</td></tr></tbody></table>'+
+    '<tbody>'+rows+'<tr class="tot"><td colspan="4">Cases: '+(bill.totalCases||0)+'</td><td colspan="3">GRAND TOTAL</td><td style="text-align:right">&#8377;'+Number(bill.totalAmount||0).toLocaleString('en-IN',{minimumFractionDigits:2})+'</td><td colspan="2"></td></tr></tbody></table>'+
     '<div class="ftr"><div><strong>GLT FIREWORKS, GOLLAGUNTA</strong><br><small>Thank you! &#128150;</small></div><div style="text-align:right"><p>Authorized Signature</p><div style="border-top:1px solid #000;width:140px;margin-top:24px;padding-top:4px">___________________</div></div></div>'+
     '</body></html>';
 }
@@ -2235,16 +2419,20 @@ function shareBillWhatsApp(id){
   var bill=bills.find(function(b){return b._id===id;});
   if(!bill){toast('Estimate not found','err');return;}
 
+  var wa=null;
   function openWA(url){
     var msg='GLT Fireworks — Estimate #'+bill.billNumber+'\n'+
       'Customer: '+bill.customerName+'\n'+
       'Date: '+(bill.displayDate||'')+'\n'+
       'Amount: '+fmtMoney(bill.totalAmount)+'\n\n'+
       'View / Download PDF:\n'+url;
-    window.open('https://wa.me/?text='+encodeURIComponent(msg),'_blank');
+    if(wa)wa.send(msg); else window.open('https://wa.me/?text='+encodeURIComponent(msg),'_blank');
   }
 
-  if(bill.pdfUrl){
+  // A stored link is only reused if it was made from this exact saved version of the
+  // estimate (its file name ends with the save time); after an edit a new PDF is made.
+  var verTag=bill.updatedAt?'_'+new Date(bill.updatedAt).getTime()+'.pdf':null;
+  if(bill.pdfUrl && verTag && bill.pdfUrl.indexOf(verTag)>=0){
     openWA(bill.pdfUrl);
     return;
   }
@@ -2254,6 +2442,7 @@ function shareBillWhatsApp(id){
     toast('Log in first to create a shareable PDF link.','err');
     return;
   }
+  wa = waOpener();
   toast('&#8987; Generating PDF link...','info');
   var htmlContent = buildBillHTML(bill);
   apiCall('saveBill', {bill: bill, oldItems: null, htmlContent: htmlContent}, function(res){
@@ -2265,6 +2454,7 @@ function shareBillWhatsApp(id){
       saveAll();
       openWA(res.fileUrl);
     } else {
+      wa.cancel();
       toast('PDF link failed: '+((res&&(res.warning||res.message))||'check the internet connection and try again')+'','err');
     }
   });
@@ -2281,8 +2471,9 @@ function renderInventory(){
     '<div class="sec-hdr"><h2 class="sec-title">&#128230; '+t('inventory')+'</h2>'+(userRole==='admin'?'<button class="btn btn-r" onclick="showAddModal()">&#10010; '+t('addProd')+'</button>':'')+'</div>'+
     '<div class="card" style="margin-bottom:12px">'+
       '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
-        '<div class="srch-wrap" style="flex:1;min-width:200px"><span class="srch-ico">&#128269;</span><input class="srch-inp" id="inv-srch" value="'+esc(invSearch)+'" placeholder="Search name or category..."></div>'+
+        '<div class="srch-wrap" style="flex:1;min-width:200px"><span class="srch-ico">&#128269;</span><input class="srch-inp" id="inv-srch" value="'+esc(invSearch)+'" placeholder="Type a code, name or category..."></div>'+
         '<div class="btn-row">'+filterBtns+'</div>'+
+        '<button class="btn btn-gh btn-sm" onclick="showCodeList()" title="Company codes - printable">&#128203; Code List</button>'+
         '<span class="tag tag-gy" id="inv-count-tag">0 items</span>'+
       '</div>'+
     '</div>'+
@@ -2304,10 +2495,8 @@ function renderInventory(){
 function updateInventoryCardsOnly(){
   var list=products.slice();
   if(invSearch){
-    var q=invSearch.toLowerCase();
-    list=list.filter(function(p){
-      return (p.name||'').toLowerCase().indexOf(q)>=0||(p.company||'').toLowerCase().indexOf(q)>=0||(p.category||'').toLowerCase().indexOf(q)>=0||(p.uom||'').toLowerCase().indexOf(q)>=0;
-    });
+    var invOk=productFilter(invSearch);
+    list=list.filter(invOk);
   }
   if(invFilter==='low')list=list.filter(function(p){return (p.stock||0)>0&&(p.stock||0)<50;});
   else if(invFilter==='out')list=list.filter(function(p){return (p.stock||0)===0;});
@@ -2323,7 +2512,7 @@ function updateInventoryCardsOnly(){
   var cards=paged.map(function(p){
     var st=((p.stock||0) - (reservationTotals[p._id]||0));
     return '<div class="inv-card">'+
-      '<div class="inv-name">'+esc(p.name)+'</div>'+
+      '<div class="inv-name">'+codeBadge(prodCode(p))+esc(p.name)+'</div>'+
       '<div class="inv-co">'+(p.qtyPerCase?p.qtyPerCase+'/case &middot; ':'')+esc(p.uom)+(p.category?' &middot; '+esc(p.category):'')+'</div>'+
       '<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px;flex-wrap:wrap">'+
         '<span class="inv-stk" style="color:'+sColor(st)+'">'+fmtNum(st)+'</span>'+
@@ -2480,7 +2669,7 @@ function showEditModal(id){
       '<input class="inp" type="number" style="flex:1;padding:6px 8px;font-size:15px" id="pr_'+r.id+'" value="'+(p.prices&&p.prices[r.id]!=null?p.prices[r.id]:'')+'" placeholder="—">'+
     '</div>';
   }).join('');
-  var uomOpts=['BOX','PKT','TIN','ROLL','PCS'].map(function(u){return '<option'+(p.uom===u?' selected':'')+'>'+u+'</option>';}).join('');
+  var uomOpts=uomOptions(p.uom);
   var qpc=p.qtyPerCase||1;
   var curCases=p.stockCases!=null?p.stockCases:Math.floor((p.stock||0)/qpc);
   var curLoose=p.stockLoose!=null?p.stockLoose:((p.stock||0)%qpc);
@@ -2490,7 +2679,7 @@ function showEditModal(id){
     '<div class="modal-body">'+
       '<div class="fg"><label class="lbl">Name</label><input class="inp" id="ep_name" value="'+esc(p.name)+'"></div>'+
       '<div class="grid2">'+
-        '<div class="fg"><label class="lbl">Company (in Name)</label><input class="inp inp-ro" id="ep_co" value="'+esc(p.company||'')+'" readonly style="opacity:0.6" title="Company is part of the product name"></div>'+
+        '<div class="fg"><label class="lbl">Company Code</label><div style="display:flex;gap:6px"><input class="inp" id="ep_code" maxlength="3" value="'+esc(prodCode(p))+'" style="font-weight:800;letter-spacing:1px" oninput="this.value=cleanCode(this.value)"><button type="button" class="btn btn-gh btn-sm" onclick="suggestEditCode(\''+id+'\')" title="Use the code this company already has">Suggest</button></div></div>'+
         '<div class="fg"><label class="lbl">UOM</label><select class="sel" id="ep_uom">'+uomOpts+'</select></div>'+
         '<div class="fg"><label class="lbl">Qty/Case</label><input class="inp" type="number" id="ep_qpc" value="'+(p.qtyPerCase||'')+'" oninput="calcEditStock()"></div>'+
         '<div class="fg"><label class="lbl">Stock Cases</label><input class="inp" type="number" min="0" step="0.5" id="ep_cases" value="'+curCases+'" oninput="calcEditStock()"></div>'+
@@ -2505,6 +2694,84 @@ function showEditModal(id){
     '<div class="modal-ftr"><button class="btn btn-gh" onclick="closeModal()">'+t('cancel')+'</button><button class="btn btn-r" onclick="saveEdit(\''+id+'\')">&#128190; '+t('save')+'</button></div>'+
   '</div>');
 }
+
+function uomOptions(current){
+  var seen={},out=[],cur=String(current||'').trim().toUpperCase();
+  ['BOX','PKT','TIN','ROLL','PCS'].concat(products.map(function(p){return p.uom;})).concat([cur]).forEach(function(u){
+    u=String(u||'').trim().toUpperCase();
+    if(u&&!seen[u]){seen[u]=1;out.push(u);}
+  });
+  return out.map(function(u){return '<option'+(u===cur?' selected':'')+'>'+esc(u)+'</option>';}).join('');
+}
+
+// == CODE LIST (each company and its code; can be printed) ==
+function codeListRows(q){
+  var toks=String(q||'').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  var by={};
+  products.forEach(function(p){
+    var nm=p.name||'',sp=nm.indexOf(' - ');
+    var co=sp>0?nm.slice(0,sp).trim():'OTHER';
+    var code=prodCode(p);
+    var k=co.toUpperCase()+'|'+code;
+    if(!by[k]) by[k]={company:co,code:code,count:0};
+    by[k].count++;
+  });
+  return Object.keys(by).map(function(k){return by[k];}).filter(function(r){
+    var hay=(r.company+' '+r.code).toLowerCase();
+    return toks.every(function(t){return hay.indexOf(t)>=0;});
+  }).sort(function(a,b){return a.company.localeCompare(b.company);});
+}
+function showCodeList(){
+  showModal('<div class="modal" style="max-width:640px">'+
+    '<div class="modal-hdr"><span class="modal-title">&#128203; Company Codes</span><button class="modal-x" onclick="closeModal()">&#10005;</button></div>'+
+    '<div class="modal-body">'+
+      '<div class="fg"><div class="srch-wrap"><span class="srch-ico">&#128269;</span><input class="srch-inp" id="cl-search" placeholder="Type a code or company..." autocomplete="off"></div></div>'+
+      '<div id="cl-body" style="max-height:60vh;overflow:auto"></div>'+
+    '</div>'+
+    '<div class="modal-ftr"><button class="btn btn-gh" onclick="closeModal()">Close</button><button class="btn btn-b" onclick="printCodeList()">&#128424; Print</button></div>'+
+  '</div>');
+  function paint(){
+    var rows=codeListRows((document.getElementById('cl-search')||{}).value||'');
+    var el=document.getElementById('cl-body');if(!el)return;
+    el.innerHTML=rows.length?rows.map(function(r){
+      return '<div style="display:flex;gap:12px;align-items:center;padding:6px 2px;border-bottom:1px dashed var(--card-border)">'+
+        '<span style="min-width:74px">'+codeBadge(r.code)+'</span>'+
+        '<span style="flex:1;font-size:15px;font-weight:600">'+esc(r.company)+'</span>'+
+        '<span style="color:var(--text-muted);font-size:13px">'+r.count+' item'+(r.count===1?'':'s')+'</span></div>';
+    }).join(''):'<div class="empty"><div class="empty-txt">No company matches</div></div>';
+  }
+  var s=document.getElementById('cl-search');
+  if(s) s.addEventListener('input',paint);
+  paint();
+}
+function printCodeList(){
+  var rows=codeListRows((document.getElementById('cl-search')||{}).value||'');
+  var body=rows.map(function(r){
+    return '<div class="row"><b>'+esc(r.code)+'</b><span>'+esc(r.company)+'</span></div>';
+  }).join('');
+  var w=window.open('','_blank','width=900,height=700');
+  if(!w){toast('Allow pop-ups to print the list','err');return;}
+  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>GLT Company Codes</title><style>'+
+    '*{box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:16px;padding:14px;color:#000}h1{font-size:22px;margin-bottom:10px}'+
+    '.cols{column-count:2;column-gap:28px}.row{display:flex;gap:14px;padding:5px 4px;border-bottom:1px dotted #999;break-inside:avoid}.row b{min-width:60px;font-size:19px;letter-spacing:1px}@media print{body{padding:0}}'+
+    '</style></head><body><h1>GLT Fireworks - Company Codes</h1><div class="cols">'+body+'</div></body></html>');
+  w.document.close();
+  setTimeout(function(){w.print();},500);
+}
+
+window.suggestEditCode=function(id){
+  var nm=(document.getElementById('ep_name')||{}).value||'';
+  var c=document.getElementById('ep_code');
+  var others=products.filter(function(p){return String(p._id)!==String(id);});
+  if(c&&typeof GLTCodes!=='undefined') c.value=GLTCodes.suggest(nm,others);
+};
+
+window.autoNewCode=function(){
+  var c=document.getElementById('np_code');
+  if(!c||c.getAttribute('data-edited')||typeof GLTCodes==='undefined') return;
+  var nm=(document.getElementById('np_name')||{}).value||'';
+  c.value=nm.trim()?GLTCodes.suggest(nm,products):'';
+};
 
 window.calcEditStock=function(){
   var qpc=parseFloat((document.getElementById('ep_qpc')||{}).value)||1;
@@ -2523,9 +2790,12 @@ window.saveEdit=function(id){
   var loose=parseFloat((document.getElementById('ep_loose')||{}).value)||0;
   var totalStk=qpc?((cases*qpc)+loose):(parseFloat((document.getElementById('ep_stk')||{}).value)||0);
 
+  var newCode=cleanCode((document.getElementById('ep_code')||{}).value)||prodCode(products[idx]);
+  if(newCode&&newCode.length<2){toast('The code must be 2 or 3 letters.','err');return;}
+
   var updatedProd=Object.assign({},products[idx],{
     name:(document.getElementById('ep_name')||{}).value||products[idx].name,
-    company:(document.getElementById('ep_co')||{}).value||'',
+    code:newCode,
     uom:(document.getElementById('ep_uom')||{}).value||'BOX',
     qtyPerCase:qpc,
     stockCases:cases,
@@ -2556,13 +2826,13 @@ window.saveEdit=function(id){
 };
 
 function showAddModal(){
-  var uomOpts=['BOX','PKT','TIN','ROLL','PCS'].map(function(u){return '<option>'+u+'</option>';}).join('');
+  var uomOpts=uomOptions('BOX');
   showModal('<div class="modal">'+
     '<div class="modal-hdr"><span class="modal-title">&#10010; '+t('addProd')+'</span><button class="modal-x" onclick="closeModal()">&#10005;</button></div>'+
     '<div class="modal-body">'+
-      '<div class="fg"><label class="lbl">Product Name *</label><input class="inp" id="np_name" placeholder="e.g. CORNATION - DRONE"></div>'+
+      '<div class="fg"><label class="lbl">Product Name * (COMPANY - ITEM)</label><input class="inp" id="np_name" placeholder="e.g. CORNATION - DRONE" oninput="autoNewCode()"></div>'+
       '<div class="grid2">'+
-        '<div class="fg"><label class="lbl">Company</label><input class="inp" id="np_co"></div>'+
+        '<div class="fg"><label class="lbl">Company Code (2-3 letters, filled in from the company)</label><input class="inp" id="np_code" maxlength="3" style="font-weight:800;letter-spacing:1px" oninput="this.setAttribute(\'data-edited\',1);this.value=cleanCode(this.value)"></div>'+
         '<div class="fg"><label class="lbl">UOM</label><select class="sel" id="np_uom">'+uomOpts+'</select></div>'+
         '<div class="fg"><label class="lbl">Qty/Case</label><input class="inp" type="number" id="np_qpc" placeholder="e.g. 60" oninput="calcAddStock()"></div>'+
         '<div class="fg"><label class="lbl">Opening Cases</label><input class="inp" type="number" min="0" step="0.5" id="np_cases" value="0" oninput="calcAddStock()"></div>'+
@@ -2593,9 +2863,12 @@ window.saveAdd=function(){
   var loose=parseFloat((document.getElementById('np_loose')||{}).value)||0;
   var totalStk=qpc?((cases*qpc)+loose):(parseFloat((document.getElementById('np_stk')||{}).value)||0);
 
+  var code=cleanCode((document.getElementById('np_code')||{}).value);
+  if(!code&&typeof GLTCodes!=='undefined') code=GLTCodes.suggest(nm,products);
+  if(code.length<2){toast('The code must be 2 or 3 letters.','err');return;}
   var newProd={
     name:nm.trim(),
-    company:(document.getElementById('np_co')||{}).value||'',
+    code:code,
     uom:(document.getElementById('np_uom')||{}).value||'BOX',
     qtyPerCase:parseFloat((document.getElementById('np_qpc')||{}).value)||null,
     stock:parseFloat((document.getElementById('np_stk')||{}).value)||0,
@@ -2632,6 +2905,9 @@ function renderHistoryList(){
     var parentBadge=b.parentBillId?'<span class="tag tag-b" style="font-size:12px">Edited</span>':'';
     var pendingItems=(b.items||[]).filter(function(it){return (it.qtyPending||0)>0;});
     var pendingBadge=pendingItems.length?'<span class="tag" style="background:rgba(245,158,11,0.16);color:#fbbf24;font-size:12px">&#9888; '+pendingItems.length+' pending</span>':'';
+    // qtyPending is clamped at 0, so an over-load (loaded qty > ordered qty) needs its own check
+    var overloadedItems=(b.items||[]).filter(function(it){return (Number(it.qtyLoaded)||0)>(Number(it.totalQty)||0);});
+    var overloadedBadge=overloadedItems.length?'<span class="tag tag-r" style="font-size:12px">&#9888; '+overloadedItems.length+' over-loaded</span>':'';
     var lockInfo=billLocks[b._id];
     var lockBadge=lockInfo?'<span class="tag tag-r" style="font-size:12px">&#128274; Editing: '+esc(lockInfo.username||'someone')+'</span>':'';
     var editBtn=userRole==='admin'
@@ -2643,7 +2919,7 @@ function renderHistoryList(){
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">'+
         '<div>'+
           '<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">'+
-            '<span class="tag tag-r">#'+esc(b.billNumber)+'</span>'+verBadge+parentBadge+pendingBadge+lockBadge+
+            '<span class="tag tag-r">#'+esc(b.billNumber)+'</span>'+verBadge+parentBadge+pendingBadge+overloadedBadge+lockBadge+
             '<span style="font-size:14px;color:var(--gy)">'+esc(b.displayDate||'')+'</span>'+
           '</div>'+
           '<div style="font-weight:700;font-size:17px">'+esc(b.customerName)+'</div>'+
@@ -2711,7 +2987,9 @@ function buildPriceLookupResults(){
   if(!cols.length){
     return '<div class="empty" style="padding:20px"><div class="empty-txt">Pick at least one reference'+(userRole==='admin'?' (or Cost Price)':'')+' above to see values.</div></div>';
   }
-  var list=products.filter(function(p){return !q||(p.name||'').toLowerCase().indexOf(q)>=0||(p.company||'').toLowerCase().indexOf(q)>=0||(p.category||'').toLowerCase().indexOf(q)>=0||(p.uom||'').toLowerCase().indexOf(q)>=0;});
+  var plOk=productFilter(q);
+  var list=products.filter(plOk);
+  var totalMatches=list.length;
   if(!list.length){
     return '<div class="empty" style="padding:20px"><div class="empty-txt">No items match "'+esc(priceLookupSearch)+'"</div></div>';
   }
@@ -2728,10 +3006,10 @@ function buildPriceLookupResults(){
       return '<td class="num"'+style+'>'+(v!=null?'&#8377;'+v:'<span style="color:var(--text-muted)">—</span>')+'</td>';
     }).join('');
     var st=(p.stock||0);
-    return '<tr><td style="font-weight:700;font-size:14px">'+esc(p.name)+'</td>'+
+    return '<tr><td style="font-weight:700;font-size:14px">'+codeBadge(prodCode(p))+esc(p.name)+'</td>'+
       '<td class="'+stockClass(st)+'" style="text-align:center;font-weight:700">'+fmtNum(st)+'</td>'+cells+'</tr>';
   }).join('');
-  var moreNote=products.filter(function(p){return !q||(p.name||'').toLowerCase().indexOf(q)>=0||(p.company||'').toLowerCase().indexOf(q)>=0||(p.category||'').toLowerCase().indexOf(q)>=0||(p.uom||'').toLowerCase().indexOf(q)>=0;}).length>100
+  var moreNote=totalMatches>100
     ?'<div style="font-size:13.5px;color:var(--text-muted);margin-top:6px">Showing first 100 matches — refine your search for more precise results.</div>':'';
   return '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Item</th><th>Stock</th>'+colHeaders+'</tr></thead><tbody>'+rows+'</tbody></table></div>'+moreNote;
 }
@@ -2762,7 +3040,7 @@ function renderPriceLookup(){
     '<div class="card"><div class="card-title">Compare up to 3 References</div>'+
       '<div class="grid2" style="grid-template-columns:repeat(3,1fr)">'+refSelects+'</div>'+
       '<div class="fg" style="margin-top:6px"><div class="srch-wrap"><span class="srch-ico">&#128269;</span>'+
-      '<input class="srch-inp" id="pl-search" value="'+esc(priceLookupSearch)+'" placeholder="Search item name..." autocomplete="off"></div></div>'+
+      '<input class="srch-inp" id="pl-search" value="'+esc(priceLookupSearch)+'" placeholder="Type a code or item name..." autocomplete="off"></div></div>'+
       '<div id="pl-results" style="margin-top:10px">'+buildPriceLookupResults()+'</div>'+
     '</div>';
   [0,1,2].forEach(function(i){
@@ -2878,7 +3156,10 @@ function buildPendingLoadsByBillForCustomer(customerName){
     (b.items||[]).forEach(function(item){
       var pending=item.qtyPending!=null?Number(item.qtyPending):0;
       if(pending>0){
-        items.push({name:item.productName,qty:pending,uom:item.uom||''});
+        items.push({name:item.productName,qty:pending,uom:item.uom||'',
+          cases:item.cases||0,qpc:item.qtyPerCase||0,totalQty:Number(item.totalQty)||0,
+          price:item.sellingPrice||0,amount:Number(item.totalAmount)||0,
+          loaded:item.qtyLoaded!=null?Number(item.qtyLoaded):0});
         billTotal+=pending;
       }
     });
@@ -2891,34 +3172,48 @@ function buildPendingLoadsByBillForCustomer(customerName){
   return {rows:rows,grandTotal:grandTotal};
 }
 
-function buildPendingLoadsCustomerHTML(customerName,data){
-  var rows=data.rows.map(function(r){
-    var itemsList=r.items.map(function(it){return esc(it.name)+' — <strong>'+fmtNum(it.qty)+' '+esc(it.uom)+'</strong>';}).join('<br>');
-    return '<tr><td>'+r.displayDate+'</td><td><strong>#'+esc(r.billNumber)+'</strong></td>'+
-      '<td>'+itemsList+'</td>'+
-      '<td style="text-align:right;font-weight:800;color:#dc2626">'+fmtNum(r.billTotal)+'</td></tr>';
+// One estimate's pending items as a table with the same columns as the estimate itself.
+// Price / amount are the ones saved on that estimate (not today's price list).
+// print=true uses fixed colours for the standalone print/PDF page.
+function buildPendingStmtBillHtml(r,print){
+  var blue=print?'#2563eb':'var(--blue-text)', red=print?'#dc2626':'var(--red-text)', green=print?'#16a34a':'var(--green-text)';
+  var body=r.items.map(function(it,i){
+    var diff=Math.round((it.loaded-it.totalQty)*1000)/1000;
+    var pc=diff===0?green:(diff>0?red:blue);
+    var pTxt=(diff>0?'+':'')+diff;
+    var redSt=' style="color:'+red+';font-weight:700"';
+    return '<tr><td>'+(i+1)+'</td><td style="font-weight:700">'+esc(it.name)+'</td>'+
+      '<td>'+(it.cases||'—')+'</td><td>'+(it.cases?(it.qpc||'—'):'—')+'</td>'+
+      '<td><strong>'+fmtNum(it.totalQty)+'</strong></td><td>'+esc(it.uom)+'</td>'+
+      '<td'+(it.price?'':redSt)+'>&#8377;'+it.price+'</td>'+
+      '<td style="text-align:right;font-weight:700;'+(it.amount?'':'color:'+red)+'">'+fmtMoney(it.amount)+'</td>'+
+      '<td style="text-align:center;font-weight:700;color:'+pc+'">'+fmtNum(it.loaded)+'</td>'+
+      '<td style="text-align:center;font-weight:700;color:'+pc+'">'+(diff<0?'&#9888; ':'')+pTxt+'</td></tr>';
   }).join('');
+  var head='<div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 6px;font-weight:800;font-size:'+(print?'13':'14')+'px'+(print?';background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:6px 8px':'')+'">'+
+    '<span>#'+esc(r.billNumber)+' &middot; '+esc(r.displayDate)+'</span>'+
+    '<span style="color:'+red+'">'+fmtNum(r.billTotal)+' pending</span></div>';
+  return head+'<div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Item</th><th>Cases</th><th>Qty/Case</th><th>Total Qty</th><th>UOM</th><th>Price</th><th style="text-align:right">Amount</th><th>Loaded</th><th>Pending</th></tr></thead><tbody>'+body+'</tbody></table></div>';
+}
+
+function buildPendingLoadsCustomerHTML(customerName,data){
+  var rows=data.rows.map(function(r){return buildPendingStmtBillHtml(r,true);}).join('');
   return '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;padding:20px;color:#000}.hdr{background:#374151;color:#fff;padding:14px;text-align:center;border-radius:8px 8px 0 0;margin-bottom:10px}.hdr h1{font-size:19px}.meta{background:#f3f4f6;border:1px solid #d1d5db;padding:8px;border-radius:6px;margin-bottom:12px}.meta label{display:block;font-size:9px;font-weight:700;color:#374151;text-transform:uppercase}.meta span{font-size:13px;font-weight:700}table{width:100%;border-collapse:collapse;margin-top:6px}th{background:#374151;color:#fff;padding:7px 6px;text-align:left;font-size:11px}td{padding:6px;border-bottom:1px solid #f3f4f6;font-size:11px;vertical-align:top}.tot{margin-top:10px;text-align:right;font-size:15px;font-weight:800;color:#dc2626}@media print{body{padding:0}}</style></head><body>'+
     '<div class="hdr"><h1>Pending Loads Statement</h1></div>'+
     '<div class="meta"><label>Customer</label><span>'+esc(customerName)+'</span></div>'+
-    '<table><thead><tr><th>Date</th><th>Estimate #</th><th>Items Pending</th><th style="text-align:right">Bill Total</th></tr></thead><tbody>'+rows+'</tbody></table>'+
+    rows+
     '<div class="tot">Grand Total Pending: '+fmtNum(data.grandTotal)+' units</div>'+
     '</body></html>';
 }
 
 window.showPendingLoadsCustomerDetail=function(customerName){
   var data=buildPendingLoadsByBillForCustomer(customerName);
-  var rows=data.rows.map(function(r){
-    var itemsList=r.items.map(function(it){return esc(it.name)+' — <strong>'+fmtNum(it.qty)+' '+esc(it.uom)+'</strong>';}).join('<br>');
-    return '<tr><td style="font-size:11.5px">'+r.displayDate+'</td><td style="font-size:12px;font-weight:700">#'+esc(r.billNumber)+'</td>'+
-      '<td style="font-size:11.5px">'+itemsList+'</td>'+
-      '<td class="num" style="font-weight:800;color:#dc2626">'+fmtNum(r.billTotal)+'</td></tr>';
-  }).join('');
+  var rows=data.rows.map(function(r){return buildPendingStmtBillHtml(r,false);}).join('');
   showModal(
-    '<div class="modal" style="max-width:600px">'+
+    '<div class="modal" style="max-width:980px">'+
     '<div class="modal-hdr"><span class="modal-title">&#9203; '+esc(customerName)+' — Pending Loads</span><button class="modal-x" onclick="closeModal()">&#10005;</button></div>'+
     '<div class="modal-body">'+
-      (data.rows.length?'<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Estimate #</th><th>Items Pending</th><th style="text-align:right">Bill Total</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+      (data.rows.length?rows+
         '<div style="text-align:right;margin-top:10px;font-weight:800;font-size:15px;color:#dc2626">Grand Total Pending: '+fmtNum(data.grandTotal)+' units</div>'
         :'<div class="empty" style="padding:16px"><div class="empty-txt">Nothing pending for this customer.</div></div>')+
     '</div>'+
@@ -2941,14 +3236,16 @@ function printPendingLoadsCustomer(customerName){
 function sharePendingLoadsCustomerWhatsApp(customerName){
   var data=buildPendingLoadsByBillForCustomer(customerName);
   var htmlContent=buildPendingLoadsCustomerHTML(customerName,data);
+  var wa=waOpener();
   toast('Generating pending loads PDF...','info');
-  apiCall('saveCustomerStatement',{customerName:customerName,htmlContent:htmlContent},function(res){
+  apiCall('saveCustomerStatement',{customerName:customerName,htmlContent:htmlContent,fileTag:'pendingloads'},function(res){
     if(res && res.status==='success' && res.fileUrl){
       var msg='Pending Loads — '+customerName+'\n'+
         'Grand Total Pending: '+fmtNum(data.grandTotal)+' units\n\n'+
         'View / Download PDF:\n'+res.fileUrl;
-      window.open('https://wa.me/?text='+encodeURIComponent(msg),'_blank');
+      wa.send(msg);
     }else{
+      wa.cancel();
       toast('Failed to generate PDF: '+(res&&res.message?res.message:'unknown error'),'err');
     }
   });
@@ -3028,11 +3325,6 @@ function renderStab(){
         '<span class="tag tag-r">#'+r.id+'</span>'+
         '<div style="font-weight:700;font-size:15px;margin-top:6px">'+esc(r.name)+'</div></div>';
     }).join('');
-    var bulkCostHtml=userRole==='admin'?
-      '<div class="card"><div class="card-title">&#128176; Cost Price (temporary)</div>'+
-        '<p style="font-size:14px;color:var(--text-muted);margin-bottom:10px">There\'s no Cost Price column in the sheet yet, so individual edits don\'t sync. Use this to set a placeholder value for every product until that\'s set up.</p>'+
-        '<button class="btn btn-o" onclick="bulkSetCostPrice()">Set &#8377;10 for All Products</button>'+
-      '</div>':'';
     var infoHtml=[['Products',products.length],['Customers',customers.length],['Estimates',bills.length],['Active Role',userRole.toUpperCase()]].map(function(x){
       return '<div style="background:var(--btn-sec-bg);border-radius:12px;border:1px solid var(--card-border);padding:12px"><div style="font-size:13px;color:var(--text-muted)">'+x[0]+'</div><div style="font-weight:800;font-size:20px;margin-top:4px">'+x[1]+'</div></div>';
     }).join('');
@@ -3043,7 +3335,6 @@ function renderStab(){
           '<button class="btn btn-lg '+(lang==='te'?'btn-r':'btn-gh')+'" onclick="setLang(\'te\')">&#127470;&#127475; తెలుగు</button>'+
         '</div></div>'+
       '<div class="card"><div class="card-title">&#128290; Reference Numbers ('+REF_LIST.length+')</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px">'+refHtml+'</div></div>'+
-      bulkCostHtml+
       '<div class="card"><div class="card-title">&#8505;&#65039; System Info</div><div class="grid2">'+infoHtml+'</div></div>';
   }else if(settingsTab==='data'){
     el.innerHTML=
@@ -3434,7 +3725,7 @@ function importData(){
 function renderStockMgr(){
   var el=document.getElementById('stab-body');if(!el)return;
   var q=stkSearch.toLowerCase().trim();
-  var filteredProducts=q?products.filter(function(p){return (p.name||'').toLowerCase().indexOf(q)>=0||(p.category||'').toLowerCase().indexOf(q)>=0||(p.company||'').toLowerCase().indexOf(q)>=0||(p.uom||'').toLowerCase().indexOf(q)>=0;}):products;
+  var filteredProducts=q?products.filter(productFilter(q)):products;
   var refCols=REF_LIST.map(function(r){return '<th style="background:#7c3aed;color:#fff;white-space:nowrap">&#8377; Ref#'+r.id+'<br><span style="font-size:12px;font-weight:400">'+esc(r.name)+'</span></th>';}).join('');
   var rows=filteredProducts.map(function(p){
     var refPrices=REF_LIST.map(function(r){
@@ -3442,8 +3733,8 @@ function renderStockMgr(){
       return '<td><input type="number" min="0" step="0.01" style="width:65px;padding:3px 5px;border:1px solid var(--card-border);background:var(--input-bg);color:var(--text-main);border-radius:4px;font-size:14px" value="'+price+'" onchange="updateProductField(\''+p._id+'\',\'price_'+r.id+'\',this.value)"></td>';
     }).join('');
     return '<tr>'+
-      '<td style="font-size:14px;font-weight:700;min-width:140px">'+esc(p.name)+'</td>'+
-      
+      '<td style="font-size:14px;font-weight:700;min-width:140px">'+codeBadge(prodCode(p))+esc(p.name)+'</td>'+
+
       '<td style="font-size:13px">'+esc(p.uom||'')+'</td>'+
       '<td><input type="number" min="0" style="width:70px;padding:3px 5px;border:1px solid var(--danger);background:var(--input-bg);color:var(--text-main);border-radius:4px;font-size:15px;font-weight:700;text-align:center" value="'+(p.qtyPerCase||'')+'" placeholder="—" onchange="updateProductField(\''+p._id+'\',\'qtyPerCase\',this.value)"></td>'+
       '<td><input type="number" min="0" step="0.5" style="width:70px;padding:3px 5px;border:2px solid var(--warning);background:var(--btn-sec-bg);color:var(--text-main);border-radius:4px;font-size:15px;font-weight:700;text-align:center" value="'+(p.stockCases||0)+'" onchange="updateProductField(\''+p._id+'\',\'stockCases\',this.value)"></td>'+
@@ -3465,7 +3756,7 @@ function renderStockMgr(){
       '</div>'+
       '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">'+
         '<div class="srch-wrap" style="flex:1;max-width:340px"><span class="srch-ico">&#128269;</span>'+
-        '<input class="srch-inp" id="stk-search" value="'+esc(stkSearch)+'" placeholder="Search name or category..." oninput="stkSearch=this.value;renderStockMgr()"></div>'+
+        '<input class="srch-inp" id="stk-search" value="'+esc(stkSearch)+'" placeholder="Type a code, name or category..." oninput="stkSearch=this.value;renderStockMgr()"></div>'+
         '<span class="tag tag-gy" id="stk-count">'+filteredProducts.length+' / '+products.length+' products</span>'+
       '</div>'+
       '<div style="overflow:auto;max-height:65vh;border:1px solid var(--card-border);border-radius:8px"><table class="tbl" style="font-size:14px;min-width:850px">'+
@@ -3546,18 +3837,23 @@ function saveAllStock(){
   renderStockMgr();
 }
 
+// The download uses the same column names as the shop's Excel price list
+// (S.NO, COMPANY - ITEM, CATEGORY, UOM, QTY PER CASE, CASES IN STOCK, LOOSE PIECES, TOTAL STOCK, COST PRICE,
+//  then one column per price list), plus CODE. Cost price is only included for admins.
 function exportStockExcel(){
-  var refHeaders=REF_LIST.map(function(r){return 'Price Ref#'+r.id+' ('+r.name+')';});
-  var headers=['Product Name','Company','Category','UOM','Qty Per Case','Cases In Stock','Loose Pieces','Total Stock','Cost Price'].concat(refHeaders);
+  var isAdm=userRole==='admin';
+  var headers=['S.NO','COMPANY - ITEM','CODE','CATEGORY','UOM','QTY PER CASE','CASES IN STOCK','LOOSE PIECES','TOTAL STOCK'];
+  if(isAdm) headers.push('COST PRICE');
+  REF_LIST.forEach(function(r){headers.push(String(r.name||('REF '+r.id)).toUpperCase());});
   var rows=[headers];
-  products.forEach(function(p){
-    var refPrices=REF_LIST.map(function(r){return (p.prices&&p.prices[r.id])?p.prices[r.id]:'';});
-    rows.push([
-      p.name||'',p.company||'',p.category||'',p.uom||'',
-      p.qtyPerCase||'',p.stockCases||0,p.stockLoose||0,p.stock||0,p.costPrice||''
-    ].concat(refPrices));
+  products.forEach(function(p,i){
+    var row=[p._id!=null?p._id:(i+1),p.name||'',prodCode(p),p.category||'',p.uom||'',
+      p.qtyPerCase||'',p.stockCases||0,p.stockLoose||0,p.stock||0];
+    if(isAdm) row.push(p.costPrice||'');
+    REF_LIST.forEach(function(r){row.push((p.prices&&p.prices[r.id])?p.prices[r.id]:'');});
+    rows.push(row);
   });
-  var csv=rows.map(function(r){return r.map(function(c){return '"'+String(c).replace(/"/g,'""')+'"';}).join(',');}).join('\n');
+  var csv='\uFEFF'+rows.map(function(r){return r.map(function(c){return '"'+String(c).replace(/"/g,'""')+'"';}).join(',');}).join('\r\n');
   var blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
   var a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
@@ -3567,42 +3863,85 @@ function exportStockExcel(){
   toast('&#8681; Excel downloaded!','ok');
 }
 
+function parseCsvText(text){
+  var rows=[],row=[],cur='',inQ=false;
+  text=String(text||'').replace(/^\uFEFF/,'');
+  for(var i=0;i<text.length;i++){
+    var ch=text[i];
+    if(inQ){
+      if(ch==='"'){ if(text[i+1]==='"'){cur+='"';i++;} else inQ=false; }
+      else cur+=ch;
+    }else if(ch==='"'){ inQ=true; }
+    else if(ch===','){ row.push(cur.trim());cur=''; }
+    else if(ch==='\n'||ch==='\r'){
+      if(ch==='\r'&&text[i+1]==='\n')i++;
+      row.push(cur.trim());cur='';
+      if(row.some(function(c){return c!=='';}))rows.push(row);
+      row=[];
+    }else cur+=ch;
+  }
+  row.push(cur.trim());
+  if(row.some(function(c){return c!=='';}))rows.push(row);
+  return rows;
+}
+
+// Reads a CSV saved from Excel. Columns are found by their heading, so the order does not matter
+// and both this app's download and the shop's own Excel columns work.
 function importStockCSV(input){
   var file=input.files[0];if(!file)return;
   var reader=new FileReader();
   reader.onload=function(e){
-    var lines=e.target.result.split('\n');
-    var headers=lines[0].split(',').map(function(c){return c.replace(/^"|"$/g,'').trim();});
-    var updated=0;
-    lines.slice(1).forEach(function(line){
-      if(!line.trim())return;
-      var cols=[];var cur='';var inQ=false;
-      for(var ci=0;ci<line.length;ci++){
-        var ch=line[ci];
-        if(ch==='"'){inQ=!inQ;}
-        else if(ch===','&&!inQ){cols.push(cur.trim());cur='';}
-        else{cur+=ch;}
-      }
-      cols.push(cur.trim());
-      var name=cols[0]&&cols[0].replace(/^"|"$/g,'');
+    var rows=parseCsvText(e.target.result);
+    if(rows.length<2){toast('The file has no rows','err');return;}
+    var norm=function(s){return String(s||'').toUpperCase().replace(/[^A-Z0-9]/g,'');};
+    var heads=rows[0].map(norm);
+    var col=function(){
+      for(var a=0;a<arguments.length;a++){var k=heads.indexOf(arguments[a]);if(k>=0)return k;}
+      return -1;
+    };
+    var cName=col('COMPANYITEM','PRODUCTNAME','NAME'), cCode=col('CODE','SHORTCODE'),
+        cQpc=col('QTYPERCASE'), cCases=col('CASESINSTOCK'), cLoose=col('LOOSEPIECES'),
+        cTotal=col('TOTALSTOCK'), cCost=col('COSTPRICE');
+    if(cName<0){toast('Could not find a COMPANY - ITEM (or Product Name) column','err');return;}
+    var refCol={};
+    REF_LIST.forEach(function(r){
+      var k=heads.indexOf(norm(r.name));
+      if(k<0) for(var h=0;h<heads.length;h++) if(heads[h].indexOf('PRICEREF'+r.id)===0){k=h;break;}
+      if(k>=0) refCol[r.id]=k;
+    });
+    var num=function(v){return v===undefined||v===''?null:(Number(String(v).replace(/,/g,''))||0);};
+    var updated=0, skipped=0;
+    rows.slice(1).forEach(function(cols){
+      var name=(cols[cName]||'').trim();
       if(!name)return;
-      var idx=products.findIndex(function(p){return p.name.toLowerCase()===name.toLowerCase();});
-      if(idx<0)return;
+      var code=cCode>=0?cleanCode(cols[cCode]):'';
+      var idx=products.findIndex(function(p){return (p.name||'').toLowerCase()===name.toLowerCase();});
+      if(idx<0){skipped++;return;}
       var p=Object.assign({},products[idx]);
-      if(cols[4]!==undefined&&cols[4]!=='')p.qtyPerCase=Number(cols[4])||0;
-      if(cols[5]!==undefined&&cols[5]!=='')p.stockCases=Number(cols[5])||0;
-      if(cols[6]!==undefined&&cols[6]!=='')p.stockLoose=Number(cols[6])||0;
-      if(cols[7]!==undefined&&cols[7]!=='')p.stock=Number(cols[7])||0;
-      else p.stock=(p.stockCases||0)*(p.qtyPerCase||0)+(p.stockLoose||0);
-      p.prices=p.prices||{};
-      REF_LIST.forEach(function(r,ri){
-        var col=cols[8+ri];
-        if(col!==undefined&&col!=='')p.prices[r.id]=Number(col.replace(/^"|"$/g,''))||null;
+      var q=cQpc>=0?num(cols[cQpc]):null; if(q!=null)p.qtyPerCase=q;
+      var cs=cCases>=0?num(cols[cCases]):null; if(cs!=null)p.stockCases=cs;
+      var lo=cLoose>=0?num(cols[cLoose]):null; if(lo!=null)p.stockLoose=lo;
+      var tt=cTotal>=0?num(cols[cTotal]):null;
+      var qn=p.qtyPerCase||0;
+      // Total stock is always cases x qty-per-case + loose (a stale TOTAL column never wins);
+      // the TOTAL column is only used when the file gives no cases / loose at all.
+      if(cs==null&&lo==null&&tt!=null){
+        if(qn>0){p.stockCases=Math.floor(tt/qn);p.stockLoose=tt-p.stockCases*qn;}
+        else{p.stockCases=0;p.stockLoose=tt;}
+      }
+      p.stock=qn>0?(p.stockCases||0)*qn+(p.stockLoose||0):(p.stockLoose||0);
+      if(userRole==='admin'&&cCost>=0){var cp=num(cols[cCost]); if(cp!=null)p.costPrice=cp||null;}
+      p.prices=Object.assign({},p.prices||{});
+      Object.keys(refCol).forEach(function(rid){
+        var v=num(cols[refCol[rid]]);
+        if(v!=null)p.prices[rid]=v||null;
       });
+      if(userRole==='admin'&&code.length>=2)p.code=code;
+      p.updatedAt=new Date().toISOString();
       products[idx]=p;updated++;
     });
     saveAll();
-    toast('&#9989; Updated '+updated+' products from CSV!','ok');
+    toast('&#9989; Updated '+updated+' products from CSV!'+(skipped?' ('+skipped+' rows did not match a product)':''),'ok');
     if(cloudOn()){
       gdPushStockToScript();
     }
@@ -3613,14 +3952,6 @@ function importStockCSV(input){
 }
 
 // == THEME (PERMANENT DARK MODE) ==
-
-window.bulkSetCostPrice = function() {
-  if (!confirm('Set Cost Price to ₹10 for all ' + products.length + ' products? This overwrites any existing cost price values. (Local only for now — there\'s no Cost Price column in the sheet yet, so this won\'t sync until one is added.)')) return;
-  products.forEach(function(p) { p.costPrice = 10; });
-  saveAll();
-  toast('Cost Price set to ₹10 for all ' + products.length + ' products.');
-  renderStab();
-};
 
 // == CLOUD SYNC (Supabase) ==
 // All traffic with the cloud database goes through js/cloud.js (GLTCloud).

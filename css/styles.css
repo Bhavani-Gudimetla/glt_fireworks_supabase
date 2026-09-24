@@ -745,6 +745,24 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--gold); width: 
 }
 .ddi:last-child { border-bottom: none; }
 .ddi:hover { background: rgba(233, 185, 92, 0.09); }
+.ddi-hl { background: rgba(233, 185, 92, 0.16); box-shadow: inset 3px 0 0 var(--brand); }
+
+/* short product code shown before the product name */
+.code-badge {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 2px 8px;
+  border-radius: 7px;
+  font-size: 0.86em;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  font-family: 'Inter', monospace;
+  color: var(--brand);
+  background: rgba(233, 185, 92, 0.13);
+  border: 1px solid rgba(233, 185, 92, 0.34);
+  vertical-align: 1px;
+  white-space: nowrap;
+}
 .ddi .mt { font-size: 15.5px; font-weight: 700; color: var(--text-main); }
 .ddi .st { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
 
