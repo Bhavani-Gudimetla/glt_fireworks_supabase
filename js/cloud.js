@@ -276,7 +276,7 @@ var GLTCloud = (function () {
       var outCustomers = JSON.parse(JSON.stringify(d.customers || []));
       overlayPending(outProducts, outCustomers);
       return { status: 'success', products: outProducts, customers: outCustomers, bills: d.bills || [],
-               references: d.references || [], settings: d.settings || {} };
+               references: d.references || [], settings: d.settings || {}, deleted: d.deleted || [] };
     });
   }
 
@@ -320,6 +320,25 @@ var GLTCloud = (function () {
     return loadPdfLibs().then(function () { return renderHtmlToPdfBlob(html); });
   }
 
+  // ---- product photos (small JPEGs in the public "product-images" bucket; admin only) ----
+  function saveProductImage(id, blob, thumb) {
+    if (!init()) return Promise.reject(new Error(configHelp()));
+    var v = Date.now(), opts = { contentType: 'image/jpeg', upsert: true, cacheControl: '31536000' };
+    function put(path, b) {
+      return sb.storage.from('product-images').upload(path, b, opts).then(function (r) { if (r.error) throw toError(r.error); });
+    }
+    return put('p/' + String(id) + '.jpg', blob)
+      .then(function () { return thumb ? put('p/' + String(id) + '_t.jpg', thumb) : null; })
+      .then(function () { return rpc('set_product_image', { p_id: String(id), p_v: v }); })
+      .then(function () { return v; });
+  }
+  function removeProductImage(id) {
+    return rpc('set_product_image', { p_id: String(id), p_v: null }).then(function () {
+      try { sb.storage.from('product-images').remove(['p/' + String(id) + '.jpg', 'p/' + String(id) + '_t.jpg']).then(function () {}, function () {}); } catch (e) {}
+      return true;
+    });
+  }
+
   // ---- the "actions" (same names the app already uses) ---------------------
   function execute(action, d) {
     d = d || {};
@@ -343,6 +362,11 @@ var GLTCloud = (function () {
           .then(function () { return { status: 'success' }; });
       case 'addCustomer':
         return rpc('save_customer', { p_customer: d.customer || {} }).then(function () { return { status: 'success' }; });
+      case 'deleteCustomer':     // admin only; needs the internet (never queued, so nothing can come back later)
+        return rpc('delete_customer', { p_id: String(d.customerId), p_delete_bills: !!d.deleteBills })
+          .then(function (r) { return { status: 'success', billIds: (r && r.bill_ids) || [] }; });
+      case 'deleteBill':
+        return rpc('delete_bill', { p_id: String(d.billId) }).then(function () { return { status: 'success' }; });
       case 'addReference':
         return rpc('save_reference', { p_id: String(d.refId), p_name: d.name || '', p_base: d.baseRefId != null ? String(d.baseRefId) : null })
           .then(function () { return { status: 'success' }; });
@@ -569,6 +593,7 @@ var GLTCloud = (function () {
     getData: getData, call: call, getReservations: getReservations, getBillLocks: getBillLocks,
     releaseOnUnload: releaseOnUnload, verifyPricePassword: verifyPricePassword, setPricePassword: setPricePassword,
     listStaff: listStaff, setStaffRole: setStaffRole, setStaffActive: setStaffActive,
+    saveProductImage: saveProductImage, removeProductImage: removeProductImage,
     outboxCount: outboxCount, pendingBillIds: pendingBillIds, flush: flush, paintBadge: paintBadge, test: test,
     isNetworkError: isNetErr, errorText: errText,
     lastFlushError: function () { return lastFlushError; },
