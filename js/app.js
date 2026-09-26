@@ -1,11 +1,11 @@
-﻿/* ==========================================================================
+/* ==========================================================================
    GLT Fireworks - application logic
    (extracted unchanged from the original single-file page; only inline
    style strings were retuned for the new look)
    ========================================================================== */
 // Shown on the Home page so it's easy to tell which copy of the code is running.
 // Keep in step with the ?v= tags in GLT_Fireworks_NEW.html.
-var APP_VERSION='20260925-5';
+var APP_VERSION='20260927-1';
 
 // == STORAGE ==
 function lsGet(k,d){try{var v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch(e){return d;}}
@@ -227,7 +227,7 @@ function toast(msg,type){
   d.className='toast-msg toast-'+type;
   // messages may carry numeric symbols like &#8377; ; a leading tick/cross is dropped because the toast adds its own
   var m=String(msg).replace(/^\s*&#(9989|10060);\s*/,'');
-  d.innerHTML=(type==='ok'?'&#9989;':'&#10060;')+' '+esc(m).replace(/&amp;#(\d+);/g,'&#$1;');
+  d.innerHTML=(type==='ok'?'&#9989;':(type==='info'?'&#8505;&#65039;':'&#10060;'))+' '+esc(m).replace(/&amp;#(\d+);/g,'&#$1;');
   document.getElementById('toast').appendChild(d);
   setTimeout(function(){d.remove();},3500);
 }
@@ -427,9 +427,22 @@ function mergeCloudBills(remote) {
 // Things that were deleted on purpose (by an admin, on any device) are removed here too.
 function applyDeletions(list){
   if(!list||!list.length) return false;
-  var c={},b={};
-  list.forEach(function(x){ if(x.kind==='customer')c[String(x.id)]=1; else if(x.kind==='bill')b[String(x.id)]=1; });
+  var c={},b={},rf={};
+  list.forEach(function(x){ if(x.kind==='customer')c[String(x.id)]=1; else if(x.kind==='bill')b[String(x.id)]=1; else if(x.kind==='reference')rf[String(x.id)]=1; });
   var changed=false;
+  var refIds=Object.keys(rf);
+  if(refIds.length){
+    var known=lsGet('deletedRefIds',[]), refChanged=false;
+    refIds.forEach(function(id){
+      if(known.indexOf(id)<0) known.push(id);
+      if(REF_MAP[id]!==undefined){ delete REF_MAP[id]; refChanged=true; }
+      products.forEach(function(p){ if(p.prices&&p.prices[id]!==undefined){ delete p.prices[id]; changed=true; } });
+      customers.forEach(function(cu){ if(String(cu.defaultRef)===id){ cu.defaultRef=''; changed=true; } });
+      for(var i=0;i<priceLookupRefs.length;i++) if(priceLookupRefs[i]===id) priceLookupRefs[i]='';
+    });
+    lsSet('deletedRefIds',known);
+    if(refChanged){ rebuildRefList(); lsSet('refMap',REF_MAP); changed=true; }
+  }
   var nc=customers.filter(function(x){return !c[String(x._id)];});
   if(nc.length!==customers.length){customers=nc;changed=true;}
   var nb=bills.filter(function(x){return !b[String(x._id)];});
@@ -540,8 +553,8 @@ function mergeServerData(d, includeBills) {
   }
 
   saveAll();
-  if (typeof curTab !== 'undefined' && typeof renderPage === 'function') {
-    renderPage(curTab);
+  if (typeof curTab !== 'undefined' && typeof refreshCurrentPage === 'function') {
+    refreshCurrentPage();
   }
 }
 
@@ -573,7 +586,7 @@ function enterApp(profile) {
   // background: upload anything that was waiting, then refresh from the cloud
   setTimeout(function() {
     GLTCloud.flush().then(function() {
-      gdPullFromScriptSilently(function() { renderPage(curTab === 'home' ? 'home' : curTab); });
+      gdPullFromScriptSilently(function() { refreshCurrentPage(); });
     });
   }, 800);
 }
@@ -587,6 +600,7 @@ function showLogin(message) {
 
 function logoutNow(message) {
   try { apiReleaseAll(); } catch (e) {}
+  try { localStorage.removeItem('custDraft'); } catch (e) {}
   GLTCloud.signOut();
   lsSet('auth', false);
   showLogin(message);
@@ -646,6 +660,37 @@ function initLogin(){
   if (!GLTCloud.configured() || GLTCloud.configHelp()) {
     errEl.innerHTML = '<div class="alert alert-warn">&#9888;&#65039; ' + esc(GLTCloud.configHelp()) + '</div>';
   }
+}
+
+// == BACKGROUND REFRESH GUARD ==
+// The app refreshes itself from the cloud every 20 seconds and when a slow download finishes.
+// Redrawing a page throws away everything typed into its forms, so a background refresh only
+// redraws when nobody is in the middle of something.
+function userIsBusy(){
+  if(curTab==='billing') return true;                       // an estimate is being built (selected product, quantities...)
+  var mc=document.getElementById('modal-container');
+  if(mc&&mc.style.display!=='none'&&mc.innerHTML.trim()) return true;     // a window is open
+  if(document.getElementById('drawer-ov')) return true;     // the side panel is open
+  var a=document.activeElement;
+  if(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)&&a.type!=='button') return true;   // typing right now
+  var els=document.querySelectorAll('#pages .page.active input, #pages .page.active textarea, #pages .page.active select');
+  for(var i=0;i<els.length;i++){
+    var e=els[i];
+    if(e.type==='button'||e.type==='file'||e.type==='hidden') continue;
+    if(e.type==='checkbox'||e.type==='radio'){ if(e.checked!==e.defaultChecked) return true; continue; }
+    if(e.tagName==='SELECT'){
+      var d=-1; for(var k=0;k<e.options.length;k++) if(e.options[k].defaultSelected){d=k;break;}
+      if(e.selectedIndex!==(d<0?0:d)) return true; continue;
+    }
+    if(e.value!==e.defaultValue) return true;               // something has been typed
+  }
+  return false;
+}
+// used by everything that redraws the current page on its own (never by a button the person pressed)
+function refreshCurrentPage(){
+  if(userIsBusy()) return false;
+  renderPage(curTab);
+  return true;
 }
 
 // == RENDER ROUTER ==
@@ -942,6 +987,15 @@ function billNamePrefix(name) {
   return first;
 }
 
+// name of a price list; if it was deleted, an estimate that used it still shows the name it was saved with
+function refNameFor(id){
+  id=String(id||'');
+  if(REF_MAP[id]) return REF_MAP[id];
+  var ob=window._editingOriginalBill;
+  if(ob&&String(ob.referenceNumber)===id&&ob.referenceName) return ob.referenceName;
+  return 'Ref '+id;
+}
+
 function getBillNum(){
   if (window._editingOriginalBill && window._editingOriginalBill.billNumber) {
     return window._editingOriginalBill.billNumber;
@@ -1228,7 +1282,7 @@ function billTopCompact(){
 }
 function buildBillTopHtml(){
   if(billTopCompact()){
-    var rn=REF_MAP[billRef]||('Ref '+billRef);
+    var rn=refNameFor(billRef);
     return '<div class="bill-top-compact"><div class="btc-main"><span>&#128100;</span><b>'+esc(billCustomer)+'</b>'+
       '<span class="tag tag-r">#'+esc(billRef)+' &middot; '+esc(rn)+'</span></div>'+
       '<button class="btn btn-gh btn-sm" onclick="unlockBillTop()">&#9999; Change</button></div>';
@@ -1543,7 +1597,7 @@ function onBillItemsChanged() {
     customerName: billCustomer.trim() || 'New Customer',
     customerId: billCustomerId,
     referenceNumber: billRef || '1',
-    referenceName: REF_MAP[billRef || '1'] || ('Ref ' + (billRef || '1')),
+    referenceName: refNameFor(billRef || '1'),
     items: billItems.slice(),
     totalAmount: total,
     totalCases: totalCases,
@@ -2065,7 +2119,7 @@ function saveBill(silent){
     customerName: billCustomer.trim(),
     customerId: billCustomerId,
     referenceNumber: billRef,
-    referenceName: REF_MAP[billRef] || ('Ref ' + billRef),
+    referenceName: refNameFor(billRef),
     items: newItemsList,
     totalAmount: total,
     totalCases: totalCases,
@@ -3246,6 +3300,382 @@ function renderPriceLookup(){
   }
 }
 
+// The "Add New Customer" form is saved as you type, so it comes back even if the page is redrawn,
+// you visit another page and return, or the browser is reloaded. It is cleared once the customer is saved.
+var CUST_FIELDS=['nc_name','nc_ph','nc_ph2','nc_addr','nc_aadhar','nc_gst','nc_ref','nc_new_ref_name','nc_new_ref_base','nc_new_ref_pct','nc_new_ref_round'];
+function saveCustDraft(){
+  var d={}, typed=false;
+  CUST_FIELDS.forEach(function(id){
+    var e=document.getElementById(id); if(!e) return;
+    d[id]=e.value;
+    if(e.value&&id!=='nc_new_ref_base'&&id!=='nc_new_ref_round') typed=true;
+  });
+  if(!typed){ try{localStorage.removeItem('custDraft');}catch(e){} return; }
+  d.edits=window._newRefEdits;
+  lsSet('custDraft',d);
+}
+function restoreCustDraft(){
+  var d=lsGet('custDraft',null); if(!d) return false;
+  var any=false;
+  CUST_FIELDS.forEach(function(id){
+    var e=document.getElementById(id);
+    if(e&&d[id]!==undefined){ e.value=d[id]; if(d[id]&&id!=='nc_new_ref_base'&&id!=='nc_new_ref_round') any=true; }
+  });
+  if(d.edits&&d.edits.map) window._newRefEdits=d.edits;
+  var r=document.getElementById('nc_ref'); if(r) toggleNewRefFields(r.value);
+  if(typeof updateIncreaseHint==='function') updateIncreaseHint();
+  return any;
+}
+function forgetCustDraft(){ try{localStorage.removeItem('custDraft');}catch(e){} }
+window.clearCustForm=function(){
+  if(!confirm('Clear everything typed in the Add New Customer form?')) return;
+  forgetCustDraft(); window._newRefEdits={base:'',map:{}}; renderCustomersPage();
+};
+
+// ---- price lists (references): overview and delete ----
+function refUsage(id){
+  id=String(id);
+  return {
+    custs: customers.filter(function(c){return String(c.defaultRef)===id;}),
+    prices: products.filter(function(p){return p.prices&&p.prices[id]!=null;}).length,
+    ests: bills.filter(function(b){return String(b.referenceNumber)===id;}).length
+  };
+}
+function buildRefCard(){
+  if(userRole!=='admin') return '';
+  var rows=REF_LIST.map(function(r){
+    var u=refUsage(r.id), orig=isOriginalRef(r.id), sid=esc(String(r.id));
+    return '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;border:1px solid var(--card-border);border-radius:10px;margin-bottom:6px;background:var(--card-bg-2)">'+
+      '<div><span class="tag tag-r">#'+esc(r.id)+'</span> <strong>'+esc(r.name)+'</strong>'+(orig?' <span class="tag tag-gy" title="The four original price lists can be changed with the Excel download / upload, but not renamed or deleted">original</span>':'')+
+        '<div style="font-size:13px;color:var(--text-muted);margin-top:2px">'+u.custs.length+' customer'+(u.custs.length===1?'':'s')+' &middot; '+u.prices+' prices &middot; used in '+u.ests+' estimate'+(u.ests===1?'':'s')+'</div></div>'+
+      (orig?'':'<div style="display:flex;gap:6px">'+
+        '<button class="btn btn-gh btn-sm" onclick="editReferenceUi(\''+sid+'\')">&#9999; Edit</button>'+
+        '<button class="btn btn-del btn-sm" onclick="deleteReferenceUi(\''+sid+'\')">&#128465; Delete</button></div>')+
+    '</div>';
+  }).join('');
+  return '<div class="card"><div class="card-title">&#128178; Price References ('+REF_LIST.length+')</div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
+      '<button class="btn btn-b btn-sm" onclick="downloadPriceExcel()">&#8681; Download all prices (Excel)</button>'+
+      '<button class="btn btn-o btn-sm" onclick="document.getElementById(\'price-xlsx-file\').click()">&#8679; Upload edited Excel</button>'+
+      '<input type="file" id="price-xlsx-file" accept=".xlsx" style="display:none" onchange="uploadPriceExcel(this)">'+
+    '</div>'+
+    '<div style="font-size:13.5px;color:var(--text-muted);margin-bottom:10px">Deleting a price list never changes estimates that are already saved. Change prices of any list (including the four original ones) by downloading the Excel, editing the yellow cells and uploading it again.</div>'+
+    (rows||'<div style="color:var(--text-muted)">No price lists.</div>')+'</div>';
+}
+
+// ---- edit a price list you created: same properties as when it was made ----
+window._editRef=null;
+function captureEditRef(){
+  var st=window._editRef; if(!st) return;
+  var v=function(id){return (document.getElementById(id)||{}).value;};
+  if(v('er_name')!==undefined) st.name=v('er_name');
+  if(v('er_base')!==undefined){ if(st.base!==v('er_base')){ st.edits={}; } st.base=v('er_base'); }
+  if(v('er_pct')!==undefined) st.pct=v('er_pct');
+  if(v('er_round')!==undefined) st.step=v('er_round');
+}
+window.updateEditRefHint=function(){
+  var el=document.getElementById('er-hint'), st=window._editRef; if(!el||!st) return;
+  captureEditRef();
+  if(!st.base){ el.innerHTML='The prices of this list stay as they are. Choose a list above only if you want to <strong>replace</strong> this list\'s prices with a recalculated copy of it.'; return; }
+  var x=parseFloat(st.pct)||0, rules=getPriceRules();
+  var n=products.filter(function(p){return excludedBy(p,rules);}).length, e=Object.keys(st.edits).length;
+  el.innerHTML=(x>0?increaseSummaryText(x):'Plain copy (no increase).')+' <strong>'+n+' item'+(n===1?'':'s')+' are excluded</strong> and keep the copied price. Items with no price in the chosen list keep their current price here.'+
+    (e?' <strong style="color:var(--brand)">'+e+' price'+(e===1?'':'s')+' edited by hand</strong> (kept).':'');
+};
+window.editReferenceUi=function(id){
+  id=String(id);
+  if(userRole!=='admin'){toast('Only an admin can edit a price list.','err');return;}
+  if(isOriginalRef(id)){toast('The four original price lists cannot be renamed. Change their prices with the Excel download / upload.','err');return;}
+  if(REF_MAP[id]===undefined){toast('Price list not found','err');return;}
+  if(!window._editRef||window._editRef.id!==id) window._editRef={id:id,name:REF_MAP[id],base:'',pct:'',step:'1',edits:{}};
+  var st=window._editRef;
+  var opts=REF_LIST.filter(function(r){return String(r.id)!==id;}).map(function(r){
+    return '<option value="'+esc(r.id)+'"'+(st.base===String(r.id)?' selected':'')+'>#'+esc(r.id)+' &middot; '+esc(r.name)+'</option>';
+  }).join('');
+  showModal('<div class="modal" style="max-width:620px">'+
+    '<div class="modal-hdr"><span class="modal-title">&#9999; Edit price list #'+esc(id)+'</span><button class="modal-x" onclick="cancelEditRef()">&#10005;</button></div>'+
+    '<div class="modal-body">'+
+      '<div class="fg"><label class="lbl">Name</label><input class="inp" id="er_name" value="'+esc(st.name)+'"></div>'+
+      '<div style="font-weight:700;margin:14px 0 6px">Change the prices of this list (optional)</div>'+
+      '<div class="grid2">'+
+        '<div class="fg"><label class="lbl">Copy prices from</label><select class="sel" id="er_base" onchange="updateEditRefHint()"><option value="">&mdash; keep the current prices &mdash;</option>'+opts+'</select></div>'+
+        '<div class="fg"><label class="lbl">Increase % (optional)</label><input class="inp" type="number" min="0" step="0.01" id="er_pct" value="'+esc(st.pct)+'" placeholder="e.g. 10" oninput="updateEditRefHint()"></div>'+
+        '<div class="fg"><label class="lbl">Round new prices to nearest &#8377;</label><input class="inp" type="number" min="0.5" step="0.5" id="er_round" value="'+esc(st.step)+'"></div>'+
+      '</div>'+
+      '<div id="er-hint" style="font-size:13px;color:var(--text-muted);margin-bottom:8px"></div>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+        '<button type="button" class="btn btn-gh btn-sm" onclick="previewEditRef()">&#128065; Preview &amp; edit new prices</button>'+
+        '<button type="button" class="btn btn-gh btn-sm" onclick="captureEditRef();openExclusionsDrawer()">&#128683; Excluded items &amp; rules</button>'+
+      '</div>'+
+    '</div>'+
+    '<div class="modal-ftr"><button class="btn btn-gh" onclick="cancelEditRef()">Cancel</button><button class="btn btn-r" onclick="saveReferenceEdit()">&#128190; Save</button></div></div>');
+  updateEditRefHint();
+};
+window.cancelEditRef=function(){ window._editRef=null; closeModal(); };
+window.previewEditRef=function(){
+  captureEditRef();
+  var st=window._editRef; if(!st) return;
+  if(!st.base){toast('Choose the list to copy prices from first.','err');return;}
+  var x=parseFloat(st.pct)||0, step=parseFloat(st.step)||1;
+  openPricePreview({
+    title:'New prices for "'+(st.name||REF_MAP[st.id])+'": '+(REF_MAP[st.base]||('Ref '+st.base))+(x>0?' + '+x+'%':' (plain copy)'),
+    base:st.base,x:x,step:step,edits:st.edits,currentId:st.id,
+    reopen:previewEditRef,
+    clearEdits:function(){ st.edits={}; },
+    onChange:function(){},
+    onDone:function(){ editReferenceUi(st.id); }
+  });
+};
+window.saveReferenceEdit=function(){
+  captureEditRef();
+  var st=window._editRef; if(!st) return;
+  var id=st.id, name=(st.name||'').trim(), base=st.base, x=parseFloat(st.pct)||0, step=parseFloat(st.step)||1;
+  if(!name){toast('The name cannot be empty.','err');return;}
+  var nameChanged=name!==REF_MAP[id], changes=[];
+  if(base){
+    var rules=getPriceRules(), cfg={base:base,x:x,step:step,currentId:id};
+    products.forEach(function(p){
+      var c=calcNewPrice(p,cfg,rules);
+      var e=st.edits[String(p._id)], fin=e!==undefined?e:c.auto;
+      if(fin!==c.cur&&!(fin==null&&c.cur==null)) changes.push({p:p,val:fin});
+    });
+  }
+  if(!nameChanged&&!changes.length){toast('Nothing to change.','info');return;}
+  if(changes.length&&!confirm('This will change '+changes.length+' prices in "'+name+'" (copied from '+(REF_MAP[base]||base)+(x>0?' + '+x+'%':'')+').\n\nThe old prices of this list are replaced. Saved estimates are not changed.\n\nContinue?')) return;
+  closeModal(); toast('Saving price list...','info');
+  function failed(res){ toast('Could not save: '+((res&&res.message)||'no connection')+(changes.length?' - some prices may already have changed; the list is being reloaded.':''),'err'); gdPullFromScriptSilently(function(){refreshCurrentPage();}); }
+  function applyLocal(){
+    if(nameChanged){ REF_MAP[id]=name; rebuildRefList(); lsSet('refMap',REF_MAP); }
+    changes.forEach(function(c){
+      var k=products.findIndex(function(p){return String(p._id)===String(c.p._id);}); if(k<0) return;
+      var pr=Object.assign({},products[k].prices||{});
+      if(c.val==null) delete pr[id]; else pr[id]=c.val;
+      products[k]=Object.assign({},products[k],{prices:pr});
+    });
+    saveAll(); window._editRef=null; renderCustomersPage();
+    toast('Price list saved'+(changes.length?' ('+changes.length+' prices changed)':'')+'. Saved estimates were not changed.','ok');
+  }
+  function sendPrices(){
+    var items=changes.map(function(c){var o={};o[id]=c.val;return {id:String(c.p._id),prices:o};}), chunks=[];
+    for(var i=0;i<items.length;i+=150) chunks.push(items.slice(i,i+150));
+    (function next(k){
+      if(k>=chunks.length){applyLocal();return;}
+      apiCall('setPricesBulk',{items:chunks[k]},function(res){ if(!res||res.status!=='success'){failed(res);return;} next(k+1); });
+    })(0);
+  }
+  if(nameChanged) apiCall('renameReference',{refId:id,name:name},function(res){ if(!res||res.status!=='success'){failed(res);return;} sendPrices(); });
+  else sendPrices();
+};
+
+// ---- all price lists in one Excel: download, edit, upload ----
+window.downloadPriceExcel=function(){
+  if(userRole!=='admin'){toast('Only an admin can do this.','err');return;}
+  if(typeof GLTXlsx==='undefined'){toast('The Excel tool did not load. Reload the page and try again.','err');return;}
+  var lists=REF_LIST.slice();
+  var head=['S.NO','CODE','COMPANY - ITEM','CATEGORY','UOM'].concat(lists.map(function(r){return r.name+' ['+r.id+']';}));
+  var list=products.slice().sort(function(a,b){return (parseInt(a._id,10)||0)-(parseInt(b._id,10)||0);});
+  var rows=[head].concat(list.map(function(p){
+    var row=[/^\d+$/.test(String(p._id))?Number(p._id):String(p._id),prodCode(p),p.name||'',p.category||'',p.uom||''];
+    lists.forEach(function(r){var v=p.prices&&p.prices[r.id]; row.push(v!=null?Number(v):null);});
+    return row;
+  }));
+  var priceCols=lists.map(function(_,i){return 5+i;});
+  var help=[['How to use this file'],[''],
+    ['1. Change only the yellow price cells. Do not change the S.NO, CODE, COMPANY - ITEM columns or the headings (the number in [ ] tells the app which price list a column is).'],
+    ['2. A blank cell means "leave this price as it is". (When you upload you can choose to treat blank cells as "no price".)'],
+    ['3. You can sort or filter the rows freely - every row is matched by its S.NO.'],
+    ['4. Save the file as .xlsx, then in the app go to Customers, Price References, Upload edited Excel.'],
+    ['5. You will see every change before anything is saved.']];
+  var bytes=GLTXlsx.build([
+    {name:'Prices',rows:rows,widths:[8,8,46,22,8].concat(lists.map(function(){return 20;})),freeze:{cols:3,rows:1},priceCols:priceCols,filter:true},
+    {name:'How to use',rows:help,widths:[120],header:true}
+  ]);
+  var blob=new Blob([bytes],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  var a=document.createElement('a'), d=new Date();
+  a.href=URL.createObjectURL(blob);
+  a.download='GLT_Price_Lists_'+pad(d.getDate())+'-'+pad(d.getMonth()+1)+'-'+d.getFullYear()+'.xlsx';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  toast('Excel downloaded ('+list.length+' products, '+lists.length+' price lists).','ok');
+};
+
+function normName(x){return String(x||'').replace(/\s+/g,' ').trim().toUpperCase();}
+function parsePriceCell(v){
+  if(v===null||v===undefined||v==='') return {blank:true};
+  if(typeof v==='number') return isFinite(v)&&v>=0?{val:Number(v.toFixed(2))}:{bad:true};
+  var t=String(v).replace(/[\u20b9,\s]|rs\.?/gi,'');
+  if(t==='') return {blank:true};
+  var n=Number(t);
+  return (t!==''&&isFinite(n)&&n>=0)?{val:Number(n.toFixed(2))}:{bad:true};
+}
+// works out what an uploaded sheet would change. sheetRows = rows of the sheet, lists = [{id,name}], prods = current products
+function planPriceUpload(sheetRows,lists,prods,removeBlank){
+  var res={error:'',changes:[],rows:0,unmatched:0,mismatch:[],invalid:[],blanks:0,ignoredHeaders:[],unchanged:0,perList:{}};
+  var hr=-1;
+  for(var i=0;i<Math.min(sheetRows.length,6);i++){
+    if((sheetRows[i]||[]).some(function(c){return normName(c)==='S.NO'||normName(c)==='SNO';})){hr=i;break;}
+  }
+  if(hr<0){res.error='Could not find the S.NO column. Please use the Excel downloaded with "Download all prices".';return res;}
+  var head=sheetRows[hr], cS=-1, cN=-1, cols=[];
+  var byName={};
+  lists.forEach(function(l){var k=normName(l.name); byName[k]=byName[k]===undefined?String(l.id):null;});
+  head.forEach(function(h,ci){
+    var t=String(h===null||h===undefined?'':h).trim(), n=normName(t);
+    if(n==='S.NO'||n==='SNO'){cS=ci;return;}
+    if(n==='COMPANY - ITEM'||n==='NAME'||n==='PRODUCT NAME'){cN=ci;return;}
+    if(n===''||n==='CODE'||n==='CATEGORY'||n==='UOM') return;
+    var m=/\[(\d+)\]\s*$/.exec(t), id=null;
+    if(m&&lists.some(function(l){return String(l.id)===m[1];})) id=m[1];
+    else if(byName[normName(t.replace(/\s*\[\d+\]\s*$/,''))]) id=byName[normName(t.replace(/\s*\[\d+\]\s*$/,''))];
+    if(id) cols.push({ci:ci,id:id}); else res.ignoredHeaders.push(t);
+  });
+  if(!cols.length){res.error='No price columns were recognised. Column headings must look like "SHOP [1]" (as in the downloaded file).';return res;}
+  var byId={}, byNm={};
+  prods.forEach(function(p){byId[String(p._id)]=p; var k=normName(p.name); byNm[k]=byNm[k]===undefined?p:null;});
+  for(var r=hr+1;r<sheetRows.length;r++){
+    var row=sheetRows[r]||[];
+    var sv=row[cS], sid=(sv===null||sv===undefined||sv==='')?'':String(typeof sv==='number'?Math.round(sv):sv).trim();
+    var nm=cN>=0&&row[cN]?normName(row[cN]):'';
+    if(!sid&&!nm) continue;
+    var p=sid?byId[sid]:null;
+    if(!p&&!sid&&nm) p=byNm[nm]||null;
+    if(!p){res.unmatched++;continue;}
+    if(nm&&normName(p.name)!==nm){res.mismatch.push('S.NO '+sid+' ('+(row[cN]||'')+')');continue;}
+    res.rows++;
+    cols.forEach(function(c){
+      var pc=parsePriceCell(row[c.ci]), cur=p.prices&&p.prices[c.id]!=null?Number(p.prices[c.id]):null;
+      if(pc.bad){res.invalid.push('row '+(r+1)+': "'+row[c.ci]+'"');return;}
+      if(pc.blank){
+        if(cur==null) return;
+        if(removeBlank){res.changes.push({p:p,id:c.id,cur:cur,val:null});res.perList[c.id]=(res.perList[c.id]||0)+1;}
+        else res.blanks++;
+        return;
+      }
+      if(cur!==null&&cur===pc.val){res.unchanged++;return;}
+      res.changes.push({p:p,id:c.id,cur:cur,val:pc.val}); res.perList[c.id]=(res.perList[c.id]||0)+1;
+    });
+  }
+  return res;
+}
+window.uploadPriceExcel=function(input){
+  var f=input.files&&input.files[0]; input.value='';
+  if(!f) return;
+  if(userRole!=='admin'){toast('Only an admin can do this.','err');return;}
+  if(typeof GLTXlsx==='undefined'){toast('The Excel tool did not load. Reload the page and try again.','err');return;}
+  if(!cloudOn()){toast('Please log in first.','err');return;}
+  toast('Reading the Excel file...','info');
+  f.arrayBuffer().then(function(buf){return GLTXlsx.read(buf);}).then(function(sheets){
+    var sh=sheets.find(function(x){return x.name==='Prices';})||sheets[0];
+    if(!sh) throw new Error('The file has no sheets.');
+    return GLTCloud.getData({}).then(function(d){ return {rows:sh.rows,prods:d.products,lists:(d.references&&d.references.length?d.references:REF_LIST)}; });
+  }).then(function(ctx){
+    window._pxu={rows:ctx.rows,prods:ctx.prods,lists:ctx.lists,removeBlank:false,file:f.name};
+    showPriceUploadPreview();
+  }).catch(function(err){
+    toast('Could not read the file: '+((err&&err.message)?(GLTCloud.isNetworkError&&GLTCloud.isNetworkError(err)?'no internet connection':err.message):'unknown error'),'err');
+  });
+};
+function showPriceUploadPreview(){
+  var U=window._pxu, plan=planPriceUpload(U.rows,U.lists,U.prods,U.removeBlank); U.plan=plan;
+  var nameOf={}; U.lists.forEach(function(l){nameOf[String(l.id)]=l.name;});
+  if(plan.error){ showModal('<div class="modal" style="max-width:560px"><div class="modal-hdr"><span class="modal-title">&#8679; Upload prices</span><button class="modal-x" onclick="closeModal()">&#10005;</button></div><div class="modal-body"><div class="alert alert-err">'+esc(plan.error)+'</div></div><div class="modal-ftr"><button class="btn btn-gh" onclick="closeModal()">Close</button></div></div>'); return; }
+  var big=plan.changes.filter(function(c){return c.cur>0&&c.val!=null&&Math.abs(c.val-c.cur)/c.cur>0.5;}).length;
+  var perList=Object.keys(plan.perList).map(function(id){return esc(nameOf[id]||('#'+id))+': <strong>'+plan.perList[id]+'</strong>';}).join(' &middot; ');
+  showModal('<div class="modal" style="max-width:900px">'+
+    '<div class="modal-hdr"><span class="modal-title">&#8679; Upload prices: '+esc(U.file)+'</span><button class="modal-x" onclick="closeModal()">&#10005;</button></div>'+
+    '<div class="modal-body">'+
+      '<div class="alert '+(plan.changes.length?'alert-info':'alert-warn')+'" style="margin-bottom:10px"><div>'+
+        '<strong>'+plan.changes.length+' price'+(plan.changes.length===1?'':'s')+' will change</strong>'+(perList?' ('+perList+')':'')+'. '+
+        plan.rows+' products read, '+plan.unchanged+' prices already the same'+(plan.blanks?', '+plan.blanks+' blank cells ignored':'')+'.'+
+        (big?'<br><span style="color:var(--red-text)">&#9888; '+big+' price'+(big===1?'':'s')+' change by more than 50% (marked in red) - please check them.</span>':'')+
+        (plan.unmatched?'<br>'+plan.unmatched+' row'+(plan.unmatched===1?'':'s')+' did not match any product and were skipped.':'')+
+        (plan.mismatch.length?'<br>'+plan.mismatch.length+' row'+(plan.mismatch.length===1?'':'s')+' skipped because the item name differs from the database: '+esc(plan.mismatch.slice(0,3).join('; '))+(plan.mismatch.length>3?' ...':'')+'.':'')+
+        (plan.invalid.length?'<br>'+plan.invalid.length+' cell'+(plan.invalid.length===1?'':'s')+' are not valid prices and were skipped: '+esc(plan.invalid.slice(0,3).join('; '))+(plan.invalid.length>3?' ...':'')+'.':'')+
+        (plan.ignoredHeaders.length?'<br>Columns ignored: '+esc(plan.ignoredHeaders.join(', '))+'.':'')+
+      '</div></div>'+
+      '<label style="display:flex;align-items:center;gap:8px;font-size:14px;margin-bottom:8px"><input type="checkbox" id="pxu-blank"'+(U.removeBlank?' checked':'')+' onchange="window._pxu.removeBlank=this.checked;showPriceUploadPreview()"> Treat blank cells as &quot;no price&quot; (removes those prices)</label>'+
+      '<div class="fg"><div class="srch-wrap"><span class="srch-ico">&#128269;</span><input class="srch-inp" id="pxu-search" placeholder="Search an item or code..." autocomplete="off"></div></div>'+
+      '<div id="pxu-body" style="max-height:44vh;overflow:auto"></div>'+
+    '</div>'+
+    '<div class="modal-ftr"><button class="btn btn-gh" onclick="closeModal()">Cancel</button>'+
+      '<button class="btn btn-r" id="pxu-apply" onclick="applyPriceUpload()"'+(plan.changes.length?'':' disabled')+'>&#10004; Apply '+plan.changes.length+' change'+(plan.changes.length===1?'':'s')+'</button></div></div>');
+  function paint(){
+    var ok=productFilter((document.getElementById('pxu-search')||{}).value||'');
+    var body=plan.changes.filter(function(c){return ok(c.p);}).slice(0,300).map(function(c){
+      var bg=c.cur>0&&c.val!=null&&Math.abs(c.val-c.cur)/c.cur>0.5;
+      return '<tr><td style="font-size:13.5px">'+codeBadge(prodCode(c.p))+esc(c.p.name)+'</td><td style="font-size:13px">'+esc(nameOf[c.id]||('#'+c.id))+'</td>'+
+        '<td class="num">'+(c.cur!=null?'&#8377;'+c.cur:'&mdash;')+'</td>'+
+        '<td class="num" style="font-weight:800;color:'+(bg?'var(--red-text)':(c.val==null?'var(--text-muted)':'var(--green-text)'))+'">'+(c.val!=null?'&#8377;'+c.val:'removed')+'</td></tr>';
+    }).join('');
+    var el=document.getElementById('pxu-body');
+    if(el) el.innerHTML=plan.changes.length?'<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Item</th><th>Price list</th><th style="text-align:right">Now</th><th style="text-align:right">New</th></tr></thead><tbody>'+body+'</tbody></table></div>'+(plan.changes.length>300?'<div style="font-size:13px;color:var(--text-muted);margin-top:6px">Showing the first 300 of '+plan.changes.length+' changes (use search to find others).</div>':''):'<div class="empty" style="padding:16px"><div class="empty-txt">Nothing to change - the file has the same prices as the database.</div></div>';
+  }
+  var s=document.getElementById('pxu-search'); if(s) s.addEventListener('input',paint);
+  paint();
+}
+window.applyPriceUpload=function(){
+  var U=window._pxu; if(!U||!U.plan||!U.plan.changes.length) return;
+  var changes=U.plan.changes, byProd={};
+  changes.forEach(function(c){var k=String(c.p._id); (byProd[k]=byProd[k]||{id:k,prices:{}}).prices[c.id]=c.val;});
+  var items=Object.keys(byProd).map(function(k){return byProd[k];}), chunks=[];
+  for(var i=0;i<items.length;i+=150) chunks.push(items.slice(i,i+150));
+  var btn=document.getElementById('pxu-apply'); if(btn){btn.disabled=true;btn.textContent='Saving...';}
+  var done=0;
+  (function next(k){
+    if(k>=chunks.length){
+      changes.forEach(function(c){
+        var j=products.findIndex(function(p){return String(p._id)===String(c.p._id);}); if(j<0) return;
+        var pr=Object.assign({},products[j].prices||{});
+        if(c.val==null) delete pr[c.id]; else pr[c.id]=c.val;
+        products[j]=Object.assign({},products[j],{prices:pr});
+      });
+      saveAll(); window._pxu=null; closeModal();
+      toast('Prices updated: '+changes.length+' change'+(changes.length===1?'':'s')+' saved to the database.','ok');
+      refreshCurrentPage();
+      return;
+    }
+    apiCall('setPricesBulk',{items:chunks[k]},function(res){
+      if(!res||res.status!=='success'){
+        toast('Stopped after '+done+' of '+items.length+' products: '+((res&&res.message)||'no connection')+'. Nothing is lost - upload the same file again to finish.','err');
+        if(btn){btn.disabled=false;btn.textContent='Try again';}
+        gdPullFromScriptSilently(function(){});
+        return;
+      }
+      done+=chunks[k].length; next(k+1);
+    });
+  })(0);
+};
+
+window.deleteReferenceUi=function(id){
+  if(userRole!=='admin'){toast('Only an admin can delete a price list.','err');return;}
+  if(isOriginalRef(id)){toast('The four original price lists (SHOP, PATTI, RETAIL BEFORE DEWALI, RETAIL DEWALI) cannot be deleted.','err');return;}
+  var name=REF_MAP[id]; if(name===undefined){toast('Price list not found','err');return;}
+  var u=refUsage(id), sid=esc(String(id));
+  var names=u.custs.slice(0,12).map(function(c){return esc(c.name);}).join(', ')+(u.custs.length>12?' and '+(u.custs.length-12)+' more':'');
+  showModal('<div class="modal" style="max-width:560px">'+
+    '<div class="modal-hdr"><span class="modal-title">&#128465; Delete price list</span><button class="modal-x" onclick="closeModal()">&#10005;</button></div>'+
+    '<div class="modal-body">'+
+      '<div style="font-weight:800;font-size:17px;margin-bottom:8px">#'+esc(id)+' &middot; '+esc(name)+'</div>'+
+      '<div style="font-size:15px;margin-bottom:8px">Its prices ('+u.prices+' products) will be removed from the product list on every device. This cannot be undone.</div>'+
+      (u.custs.length?'<div class="alert alert-warn" style="margin-bottom:8px">&#9888;&#65039; <strong>'+u.custs.length+' customer'+(u.custs.length===1?' uses':'s use')+' this price list:</strong> '+names+'.<br>'+
+        'After deleting, they will have <strong>no price list</strong>. You must add a new price list for '+(u.custs.length===1?'this customer':'each of them')+' later (Customers &rarr; Edit &rarr; Default Ref) before making their next estimate.</div>'
+        :'<div style="font-size:14px;color:var(--text-muted);margin-bottom:8px">No customer uses this price list.</div>')+
+      '<div class="alert alert-ok" style="margin-bottom:0">&#9989; Estimates already saved'+(u.ests?' ('+u.ests+' made with this list)':'')+' are <strong>not changed</strong>: they keep their own prices and the price list name.</div>'+
+    '</div>'+
+    '<div class="modal-ftr"><button class="btn btn-gh" onclick="closeModal()">Cancel</button>'+
+      '<button class="btn btn-del" onclick="confirmDeleteReference(\''+sid+'\')">Delete price list</button></div></div>');
+};
+window.confirmDeleteReference=function(id){
+  closeModal();
+  toast('Deleting price list...','info');
+  apiCall('deleteReference',{refId:id},function(res){
+    if(!res||res.status!=='success'){toast('Could not delete: '+((res&&res.message)||'no connection'),'err');return;}
+    applyDeletions([{kind:'reference',id:String(id)}]);
+    saveAll();
+    toast('Price list deleted. Saved estimates were not changed.','ok');
+    renderCustomersPage();
+  });
+};
+
 function renderCustomersPage(){
   var el=document.getElementById('pg-customers');
   var isAdmin=userRole==='admin';
@@ -3259,7 +3689,7 @@ function renderCustomersPage(){
       (extraLine?'<div style="font-size:13px;color:var(--text-muted);margin-top:2px">'+extraLine+'</div>':'')+
       '</div>'+
       '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'+
-        (c.defaultRef?'<span class="tag tag-r">Ref #'+c.defaultRef+'</span>':'')+
+        (c.defaultRef?'<span class="tag tag-r">Ref #'+c.defaultRef+'</span>':'<span class="tag tag-o" title="Open Edit and choose a Default Ref">&#9888; No price list</span>')+
         (isAdmin?'<button class="btn btn-b btn-sm" onclick="showCustomerSummary(\''+idAttr+'\')">&#128202; Summary</button>':'')+
         '<button class="btn btn-gh btn-sm" onclick="editCustomer(\''+idAttr+'\')">&#9999; Edit</button>'+
         (isAdmin?'<button class="btn btn-del btn-sm" onclick="deleteCustomerUi(\''+idAttr+'\')">&#128465; Delete</button>':'')+
@@ -3281,13 +3711,24 @@ function renderCustomersPage(){
       '<div id="nc-new-ref-fields" style="display:none;margin-top:10px;padding:12px;background:var(--btn-sec-bg);border-radius:10px;border:1px dashed var(--card-border)">'+
         '<div class="grid2">'+
           '<div class="fg"><label class="lbl">New Reference Name</label><input class="inp" id="nc_new_ref_name" placeholder="e.g. this customer\'s name"></div>'+
-          '<div class="fg"><label class="lbl">Copy Prices From</label><select class="inp" id="nc_new_ref_base">'+refOpts+'</select></div>'+
+          '<div class="fg"><label class="lbl">Copy Prices From</label><select class="inp" id="nc_new_ref_base" onchange="updateIncreaseHint()">'+refOpts+'</select></div>'+
+          (isAdmin?'<div class="fg"><label class="lbl">Increase % (optional)</label><input class="inp" type="number" min="0" step="0.01" id="nc_new_ref_pct" placeholder="e.g. 10  (leave empty = plain copy)" oninput="updateIncreaseHint()"></div>'+
+                   '<div class="fg"><label class="lbl">Round new prices to nearest &#8377;</label><input class="inp" type="number" min="0.5" step="0.5" id="nc_new_ref_round" value="1"></div>':'')+
         '</div>'+
-        '<div style="font-size:13px;color:var(--text-muted)">Every product\'s price for the selected reference is copied into the new one — this new reference becomes the customer\'s default, and you can edit individual prices afterward.</div>'+
+        (isAdmin?'<div id="nc-inc-hint" style="font-size:13px;color:var(--text-muted);margin-bottom:8px"></div>'+
+                 '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
+                   '<button type="button" class="btn btn-gh btn-sm" onclick="previewNewRefPrices()">&#128065; Preview new prices</button>'+
+                   '<button type="button" class="btn btn-gh btn-sm" onclick="openExclusionsDrawer()">&#128683; Excluded items &amp; rules</button>'+
+                 '</div>':'')+
+        '<div style="font-size:13px;color:var(--text-muted)">Every product\'s price for the selected reference is copied into the new one'+(isAdmin?' (with the increase, if you entered one)':'')+' — this new reference becomes the customer\'s default, and you can edit individual prices afterward.</div>'+
       '</div>'+
-      '<button class="btn btn-r" style="margin-top:10px" onclick="addCust()">&#10010; Add Customer</button>'+
+      '<button class="btn btn-r" style="margin-top:10px" onclick="addCust()">&#10010; Add Customer</button> '+
+      '<button class="btn btn-gh btn-sm" style="margin-top:10px" onclick="clearCustForm()">Clear form</button>'+
     '</div>'+
+    buildRefCard()+
     '<div class="card"><div class="card-title">&#128101; All Customers ('+customers.length+')</div>'+custCards+'</div>';
+  el.oninput=saveCustDraft; el.onchange=saveCustDraft;
+  if(restoreCustDraft()) toast('Your unfinished customer form was restored.','info');
 }
 
 var pendingLoadsSearch='';
@@ -3655,6 +4096,340 @@ window.resetAllLocalData=function(){
   if(confirm(msg)){ localStorage.clear(); window.location.reload(); }
 };
 
+// ==================== PRICE INCREASE RULES ====================
+// A new price list can be made from another one plus x %.  How much each item goes up depends on its price:
+//   below tiers.t1            -> x   * f1     (default: below Rs 500  -> x %)
+//   from t1 up to below t2    -> x   * f2     (default: 500 to 999    -> half of x)
+//   t2 and above              -> x   * f3     (default: 1000 and up   -> a quarter of x)
+// Items matching an "exclude" rule keep the copied price unchanged.  The rules are saved in the cloud
+// (admin only) so every admin sees the same ones.
+var DEFAULT_PRICE_RULES={v:2,
+  tiers:{t1:500,t2:1000,f1:1,f2:0.5,f3:0.25},
+  exclude:[
+    {id:'r-kp', label:'All KP items', company:'KP'},
+    {id:'r-lcl',label:'All LOCAL items', company:'LCL'},
+    {id:'r-spk',label:'Sparklers of 7 CM and 10 CM (any company)', category:'SPARKLER', nameHasAny:['7 CM','10 CM']}
+  ]};
+function getPriceRules(){
+  var raw=appSettings&&appSettings['price_increase_rules'];
+  if(raw){
+    try{
+      var r=typeof raw==='string'?JSON.parse(raw):raw;
+      if(r&&r.tiers&&Array.isArray(r.exclude)){
+        if((r.v||1)<2&&r.tiers.f3===0.125){r.tiers.f3=0.25;r.v=2;}   // the first version used 0.125 by mistake; it is 0.25
+        return r;
+      }
+    }catch(e){}
+  }
+  return JSON.parse(JSON.stringify(DEFAULT_PRICE_RULES));
+}
+function savePriceRules(r){
+  var text=JSON.stringify(r);
+  appSettings=Object.assign({},appSettings,{price_increase_rules:text});
+  lsSet('appSettings',appSettings);
+  if(cloudOn()) apiCall('setPriceRules',{value:text},function(res){
+    if(!res||res.status!=='success') toast('Rules saved on this device only: '+((res&&res.message)||'no connection'),'err');
+  });
+}
+function nameHasCm(name,list){
+  var n=String(name||'').toUpperCase();
+  return list.some(function(v){
+    v=String(v||'').trim().toUpperCase();
+    if(!v) return false;
+    if(!/^[0-9]/.test(v)) return n.indexOf(v)>=0;                    // a word: found anywhere in the name
+    // a size like "7 CM": must not be part of a bigger number (so 7 CM does not match 17 CM), spaces optional
+    var re=new RegExp('(^|[^0-9])'+v.replace(/[.*+?^${}()|[\]\\]/g,'\\$&').replace(/\s+/g,'\\s*')+'(?![A-Z])');
+    return re.test(n);
+  });
+}
+// every condition written in a rule must hold (company code, category, words in the name, or one exact product)
+function ruleMatches(rule,p){
+  if(rule.productId!=null) return String(p._id)===String(rule.productId);
+  var any=false;
+  if(rule.company){ any=true; if(String(prodCode(p)).toUpperCase()!==String(rule.company).toUpperCase()) return false; }
+  if(rule.category){ any=true; if(String(p.category||'').toUpperCase().indexOf(String(rule.category).toUpperCase())<0) return false; }
+  if(rule.nameHasAny&&rule.nameHasAny.length){ any=true; if(!nameHasCm(p.name,rule.nameHasAny)) return false; }
+  return any;
+}
+function excludedBy(p,rules){
+  rules=rules||getPriceRules();
+  for(var i=0;i<rules.exclude.length;i++) if(ruleMatches(rules.exclude[i],p)) return rules.exclude[i];
+  return null;
+}
+function tierPct(base,x,t){ return x*(base<t.t1?t.f1:(base<t.t2?t.f2:t.f3)); }
+function increasedPrice(base,x,t,step){
+  step=step>0?step:1;
+  var v=base*(1+tierPct(base,x,t)/100);
+  return Number((Math.round(v/step)*step).toFixed(2));
+}
+function increaseSummaryText(x){
+  var t=getPriceRules().tiers, f=function(n){return Number((n).toFixed(4));};
+  return 'With '+f(x)+'%: below &#8377;'+t.t1+' &rarr; '+f(x*t.f1)+'% &middot; &#8377;'+t.t1+' to &#8377;'+(t.t2-1)+' &rarr; '+f(x*t.f2)+'% &middot; &#8377;'+t.t2+' and above &rarr; '+f(x*t.f3)+'%.';
+}
+// prices typed by hand in the preview (they always win over the calculated ones); forgotten when the copied-from list changes
+window._newRefEdits={base:'',map:{}};
+function newRefEdits(){
+  var base=(document.getElementById('nc_new_ref_base')||{}).value||'';
+  if(window._newRefEdits.base!==base) window._newRefEdits={base:base,map:{}};
+  return window._newRefEdits.map;
+}
+window.clearNewRefEdits=function(){ window._newRefEdits={base:(document.getElementById('nc_new_ref_base')||{}).value||'',map:{}}; updateIncreaseHint(); return false; };
+window.updateIncreaseHint=function(){
+  var el=document.getElementById('nc-inc-hint'); if(!el) return;
+  var x=parseFloat((document.getElementById('nc_new_ref_pct')||{}).value)||0;
+  var rules=getPriceRules();
+  var n=products.filter(function(p){return excludedBy(p,rules);}).length;
+  var e=Object.keys(newRefEdits()).length;
+  el.innerHTML=(x>0?increaseSummaryText(x)+' <strong>'+n+' item'+(n===1?'':'s')+' are excluded</strong> and keep the copied price.'
+                  :'Enter an increase % to raise the new prices. <strong>'+n+' item'+(n===1?'':'s')+' are excluded</strong> from increases (see "Excluded items &amp; rules").')+
+    (e?' <strong style="color:var(--brand)">'+e+' price'+(e===1?'':'s')+' edited by hand</strong> (kept) <a href="#" onclick="return clearNewRefEdits()" style="color:var(--red-text)">clear</a>':'');
+};
+
+function isOriginalRef(id){ return ['1','2','3','4'].indexOf(String(id))>=0; }
+
+// price of one product in the list being made / edited
+//   cfg = { base (list copied from), x (increase %), step (rounding), currentId (the list being edited, if any) }
+function calcNewPrice(p,cfg,rules){
+  var b=p.prices&&p.prices[cfg.base]!=null?p.prices[cfg.base]:null;
+  var cur=cfg.currentId&&p.prices&&p.prices[cfg.currentId]!=null?p.prices[cfg.currentId]:null;
+  var rule=excludedBy(p,rules), auto;
+  if(b==null) auto=cfg.currentId?cur:null;                         // nothing to copy: an existing list keeps its price
+  else auto=(rule||!(cfg.x>0))?b:increasedPrice(b,cfg.x,rules.tiers,cfg.step);
+  return {b:b,cur:cur,rule:rule,auto:auto};
+}
+
+// One window to look at (and change by hand) every new price.
+//   cfg = { title, base, x, step, edits (an object that is edited in place), currentId, reopen(), clearEdits(), onChange(), onDone() }
+function openPricePreview(cfg){
+  var rules=getPriceRules(), edits=cfg.edits, editing=!!cfg.currentId;
+  var rows=products.map(function(p){ var c=calcNewPrice(p,cfg,rules); c.p=p; return c; });
+  window._prev={rows:rows,edits:edits,cfg:cfg};
+  showModal('<div class="modal" style="max-width:900px">'+
+    '<div class="modal-hdr"><span class="modal-title">&#128065; '+esc(cfg.title)+'</span><button class="modal-x" onclick="donePricePreview()">&#10005;</button></div>'+
+    '<div class="modal-body">'+
+      '<div class="alert alert-info" style="margin-bottom:10px" id="pv-sum"></div>'+
+      '<div style="font-size:13.5px;color:var(--text-muted);margin-bottom:8px">&#9999;&#65039; Type over any <strong>New</strong> price to set your own. Edited prices are kept. Clear the box to go back to the calculated price.</div>'+
+      '<div class="fg"><div class="srch-wrap"><span class="srch-ico">&#128269;</span><input class="srch-inp" id="pv-search" placeholder="Search an item or code..." autocomplete="off"></div></div>'+
+      '<div id="pv-body" style="max-height:48vh;overflow:auto"></div>'+
+    '</div>'+
+    '<div class="modal-ftr"><button class="btn btn-gh" onclick="undoPreviewEdits()">Undo my edits</button><button class="btn btn-r" onclick="donePricePreview()">&#10004; Done</button></div></div>');
+  function finalOf(r){ var e=window._prev.edits[String(r.p._id)]; return e!==undefined?e:r.auto; }
+  function summary(){
+    var up=0,ex=0,ed=0,np=0,chg=0;
+    window._prev.rows.forEach(function(r){
+      var f=finalOf(r);
+      if(window._prev.edits[String(r.p._id)]!==undefined) ed++;
+      if(r.b==null&&f==null){np++;return;}
+      if(r.rule&&r.b!=null) ex++;
+      if(f!=null&&r.b!=null&&f>r.b) up++;
+      if(editing&&f!==r.cur&&!(f==null&&r.cur==null)) chg++;
+    });
+    var el=document.getElementById('pv-sum');
+    if(el) el.innerHTML='<div>'+(cfg.x>0?increaseSummaryText(cfg.x)+'<br>':'')+
+      (editing?'<strong>'+chg+'</strong> prices in this list will change, ':'<strong>'+up+'</strong> prices go up, ')+
+      '<strong>'+ex+'</strong> excluded items keep the copied price'+(np?', '+np+' items have no price':'')+
+      (ed?', <strong style="color:var(--brand)">'+ed+' edited by hand</strong>':'')+'. Rounded to the nearest &#8377;'+cfg.step+'.</div>';
+  }
+  function paint(){
+    var ok=productFilter((document.getElementById('pv-search')||{}).value||'');
+    var body=window._prev.rows.filter(function(r){return ok(r.p);}).slice(0,400).map(function(r){
+      var id=esc(String(r.p._id)), edited=window._prev.edits[String(r.p._id)]!==undefined, f=finalOf(r);
+      return '<tr id="pv-r-'+id+'"'+(r.rule?' style="opacity:.75"':'')+'><td style="font-size:13.5px">'+codeBadge(prodCode(r.p))+esc(r.p.name)+
+          (r.rule?'<div style="font-size:12px;color:var(--text-muted)">excluded: '+esc(r.rule.label||'')+'</div>':'')+'</td>'+
+        '<td class="num">'+(r.b!=null?'&#8377;'+r.b:'&mdash;')+'</td>'+
+        (editing?'<td class="num" style="color:var(--text-muted)">'+(r.cur!=null?'&#8377;'+r.cur:'&mdash;')+'</td>':'')+
+        '<td class="num"><input class="inp" type="number" min="0" step="0.5" data-pid="'+id+'" value="'+(f==null?'':f)+'" placeholder="&mdash;" '+
+          'style="width:110px;padding:6px 8px;text-align:right;font-weight:800;'+(edited?'border:2px solid var(--brand);':'')+'" onchange="editNewRefPrice(this)"></td></tr>';
+    }).join('');
+    var el=document.getElementById('pv-body');
+    if(el) el.innerHTML='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Item</th><th style="text-align:right">Copied</th>'+(editing?'<th style="text-align:right">Now</th>':'')+'<th style="text-align:right">New price</th></tr></thead><tbody>'+body+'</tbody></table></div>';
+  }
+  window._pvSummary=summary;
+  var srch=document.getElementById('pv-search'); if(srch) srch.addEventListener('input',paint);
+  summary(); paint();
+}
+window.previewNewRefPrices=function(){
+  var base=(document.getElementById('nc_new_ref_base')||{}).value||'';
+  var x=parseFloat((document.getElementById('nc_new_ref_pct')||{}).value)||0;
+  var step=parseFloat((document.getElementById('nc_new_ref_round')||{}).value)||1;
+  if(!base){toast('Choose the reference to copy prices from first.','err');return;}
+  openPricePreview({
+    title:'New prices: '+(REF_MAP[base]||('Ref '+base))+(x>0?' + '+x+'%':' (plain copy)'),
+    base:base,x:x,step:step,edits:newRefEdits(),
+    reopen:previewNewRefPrices,
+    clearEdits:function(){ clearNewRefEdits(); },
+    onChange:function(){ if(typeof saveCustDraft==='function') saveCustDraft(); },
+    onDone:function(){ updateIncreaseHint(); }
+  });
+};
+window.editNewRefPrice=function(inp){
+  var pid=inp.getAttribute('data-pid'), P=window._prev; if(!P) return;
+  var r=P.rows.find(function(x){return String(x.p._id)===pid;}); if(!r) return;
+  var v=inp.value===''?NaN:parseFloat(inp.value);
+  if(isNaN(v)||v<0||v===r.auto){ delete P.edits[pid]; inp.value=r.auto==null?'':r.auto; inp.style.border=''; }
+  else { P.edits[pid]=Number(v.toFixed(2)); inp.style.border='2px solid var(--brand)'; }
+  if(window._pvSummary) window._pvSummary();
+  if(P.cfg&&P.cfg.onChange) P.cfg.onChange();
+};
+window.undoPreviewEdits=function(){ var c=window._prev&&window._prev.cfg; if(!c) return; c.clearEdits(); c.reopen(); };
+window.donePricePreview=function(){ var c=window._prev&&window._prev.cfg; closeModal(); if(c&&c.onDone) c.onDone(); };
+
+// ---- side panel: which items are left out of an increase (and the rules behind it) ----
+window.openExclusionsDrawer=function(){
+  if(userRole!=='admin'){toast('Only an admin can change these rules.','err');return;}
+  closeExclusionsDrawer();
+  var ov=document.createElement('div'); ov.className='drawer-ov'; ov.id='drawer-ov';
+  ov.innerHTML='<div class="drawer" id="drawer"></div>';
+  ov.addEventListener('mousedown',function(e){ if(e.target===ov) closeExclusionsDrawer(); });
+  document.body.appendChild(ov);
+  paintExclusionsDrawer();
+};
+window.closeExclusionsDrawer=function(){
+  var o=document.getElementById('drawer-ov'); if(o) o.remove();
+  updateIncreaseHint();
+  if(typeof updateEditRefHint==='function') updateEditRefHint();
+};
+function paintExclusionsDrawer(keepScroll){
+  var d=document.getElementById('drawer'); if(!d) return;
+  var top=d.scrollTop, rules=getPriceRules(), t=rules.tiers;
+  var excluded=[];
+  products.forEach(function(p){var r=excludedBy(p,rules); if(r) excluded.push({p:p,r:r});});
+  // company / category suggestions
+  var cos={}, cats={};
+  products.forEach(function(p){
+    var c=prodCode(p); if(c&&!cos[c]) cos[c]=(p.name.indexOf(' - ')>0?p.name.slice(0,p.name.indexOf(' - ')):c);
+    var g=String(p.category||'').trim(); if(g) cats[g]=1;
+  });
+  d.innerHTML=
+    '<div class="drawer-hdr"><h2 class="sec-title" style="margin:0;font-size:20px">&#128683; Items not increased</h2><button class="modal-x" onclick="closeExclusionsDrawer()">&#10005;</button></div>'+
+    '<div style="font-size:13.5px;color:var(--text-muted);margin-top:4px">These items keep the copied price, whatever the percentage. Changes are saved for every admin.</div>'+
+
+    '<h3>How much each price goes up</h3>'+
+    '<div class="tier-grid">'+
+      '<div>Prices below &#8377;<input class="inp" style="width:80px;display:inline-block" type="number" id="tr_t1" value="'+t.t1+'"></div>'+
+      '<div>x &nbsp;<input class="inp" style="width:100px;display:inline-block" type="number" step="0.001" id="tr_f1" value="'+t.f1+'"></div>'+
+      '<div>From that up to below &#8377;<input class="inp" style="width:80px;display:inline-block" type="number" id="tr_t2" value="'+t.t2+'"></div>'+
+      '<div>x &nbsp;<input class="inp" style="width:100px;display:inline-block" type="number" step="0.001" id="tr_f2" value="'+t.f2+'"></div>'+
+      '<div>&#8377;'+t.t2+' and above</div>'+
+      '<div>x &nbsp;<input class="inp" style="width:100px;display:inline-block" type="number" step="0.001" id="tr_f3" value="'+t.f3+'"></div>'+
+    '</div>'+
+    '<div style="font-size:12.5px;color:var(--text-muted);margin:6px 0">"x 0.5" means half of the % you type, "x 0.25" means a quarter of it.</div>'+
+    '<button class="btn btn-g btn-sm" onclick="saveTierEdits()">&#128190; Save these amounts</button>'+
+
+    '<h3>Rules ('+rules.exclude.length+')</h3>'+
+    (rules.exclude.length?rules.exclude.map(function(r){
+      return '<div class="rule-row"><span>'+esc(r.label||'rule')+'</span><button class="btn btn-del btn-sm" onclick="removeExcludeRule(\''+esc(String(r.id))+'\')" title="Stop excluding this">&#10005;</button></div>';
+    }).join(''):'<div style="color:var(--text-muted);font-size:14px">No rules - every item can be increased.</div>')+
+
+    '<h3>Add more exclusions</h3>'+
+    '<datalist id="dl-co">'+Object.keys(cos).sort().map(function(c){return '<option value="'+esc(c)+'">'+esc(cos[c])+'</option>';}).join('')+'</datalist>'+
+    '<datalist id="dl-cat">'+Object.keys(cats).sort().map(function(c){return '<option value="'+esc(c)+'"></option>';}).join('')+'</datalist>'+
+    '<div style="font-size:13.5px;color:var(--text-muted);margin-bottom:8px">Fill one, two or all three boxes. When you fill more than one, an item must match all of them.</div>'+
+    '<div class="fg"><label class="lbl">Company code</label><input class="inp" id="ex_co" list="dl-co" placeholder="e.g. AJN" maxlength="3" style="text-transform:uppercase" oninput="updateRuleMatch()"></div>'+
+    '<div class="fg"><label class="lbl">Category</label><input class="inp" id="ex_cat" list="dl-cat" placeholder="e.g. BOMB" oninput="updateRuleMatch()"></div>'+
+    '<div class="fg"><label class="lbl">Name contains (any of these words; separate with commas)</label><input class="inp" id="ex_name" placeholder="e.g. CANDLE, 7 CM" oninput="updateRuleMatch()"></div>'+
+    '<div id="ex_match" style="font-size:13.5px;color:var(--text-muted);margin-bottom:8px"></div>'+
+    '<button class="btn btn-g btn-sm" onclick="addExcludeRule()" style="margin-bottom:12px">&#10010; Add this rule</button>'+
+    '<div class="fg"><label class="lbl">One product (search)</label>'+
+      '<div class="srch-wrap"><span class="srch-ico">&#128269;</span><input class="srch-inp" id="ex_prod" placeholder="Type product code or name..." autocomplete="off"><div class="ddl" id="ex_prod_ddl"></div></div></div>'+
+
+    '<h3>Excluded right now ('+excluded.length+')</h3>'+
+    '<div style="max-height:40vh;overflow:auto">'+
+      excluded.slice(0,400).map(function(x){
+        return '<div class="ex-row"><span>'+codeBadge(prodCode(x.p))+esc(x.p.name)+'</span><span style="font-size:12px;color:var(--text-muted);white-space:nowrap">'+(x.r.productId!=null?'<a href="#" onclick="removeExcludeRule(\''+esc(String(x.r.id))+'\');return false" style="color:var(--red-text)">remove</a>':esc(x.r.label||''))+'</span></div>';
+      }).join('')+
+    '</div>';
+  d.scrollTop=keepScroll===false?0:top;
+  wireExcludeSearch();
+}
+// same look and keys as the product search on the estimate page: type, use the arrow keys, press Enter
+function wireExcludeSearch(){
+  var inp=document.getElementById('ex_prod'), dd=document.getElementById('ex_prod_ddl');
+  if(!inp||!dd) return;
+  var hl=0;
+  function paintHl(){
+    var rows=dd.querySelectorAll('.ddi[onmousedown]');
+    rows.forEach(function(r,i){r.classList.toggle('ddi-hl',i===hl);});
+    if(rows[hl]&&rows[hl].scrollIntoView) rows[hl].scrollIntoView({block:'nearest'});
+  }
+  inp.addEventListener('input',function(){
+    var q=inp.value.trim();
+    if(q.length<2){dd.classList.remove('open');return;}
+    var all=searchProducts(q), res=all.slice(0,40), rules=getPriceRules();
+    if(!res.length){
+      dd.innerHTML='<div class="ddi" style="color:var(--text-muted)">No product matches "'+esc(q)+'"</div>';
+      dd.classList.add('open');return;
+    }
+    dd.innerHTML=res.map(function(p){
+      var already=excludedBy(p,rules);
+      var body='<div style="display:flex;justify-content:space-between;align-items:center;gap:10px">'+
+        '<div style="flex:1;min-width:0"><div class="mt">'+codeBadge(prodCode(p))+esc(p.name)+'</div>'+
+          '<div class="st">'+esc(p.uom)+(p.qtyPerCase?' &middot; '+p.qtyPerCase+'/case':'')+' &middot; '+esc(p.category)+'</div></div>'+
+        pimg(p,'pimg-md',true)+
+        '<div style="flex-shrink:0;text-align:right">'+(already?'<span class="tag tag-gy" title="'+esc(already.label||'')+'">already excluded</span>':'<span class="tag tag-r">+ Exclude</span>')+'</div>'+
+      '</div>';
+      return already?'<div class="ddi" style="opacity:.6;cursor:default">'+body+'</div>'
+                    :'<div class="ddi" onmousedown="addExcludeProduct(\''+esc(String(p._id))+'\')">'+body+'</div>';
+    }).join('')+(all.length>res.length?'<div class="ddi" style="color:var(--text-muted);font-size:13px">+ '+(all.length-res.length)+' more - type a few more letters to narrow it down</div>':'');
+    dd.classList.add('open'); hl=0; paintHl();
+  });
+  inp.addEventListener('keydown',function(e){
+    var rows=dd.querySelectorAll('.ddi[onmousedown]');
+    if(!dd.classList.contains('open')||!rows.length) return;
+    if(e.key==='ArrowDown'){e.preventDefault();hl=Math.min(rows.length-1,hl+1);paintHl();}
+    else if(e.key==='ArrowUp'){e.preventDefault();hl=Math.max(0,hl-1);paintHl();}
+    else if(e.key==='Enter'){
+      e.preventDefault();
+      var pick=rows[Math.max(0,hl)];
+      var m=pick&&/addExcludeProduct\('([^']*)'\)/.exec(pick.getAttribute('onmousedown')||'');
+      if(m) addExcludeProduct(m[1]);
+    }
+  });
+  inp.addEventListener('blur',function(){setTimeout(function(){dd.classList.remove('open');},200);});
+}
+function editRules(fn){
+  var r=getPriceRules(); fn(r); savePriceRules(r); paintExclusionsDrawer();
+}
+window.saveTierEdits=function(){
+  var g=function(id){return parseFloat((document.getElementById(id)||{}).value);};
+  var t={t1:g('tr_t1'),t2:g('tr_t2'),f1:g('tr_f1'),f2:g('tr_f2'),f3:g('tr_f3')};
+  if(!(t.t1>0)||!(t.t2>t.t1)||[t.f1,t.f2,t.f3].some(function(f){return !(f>=0);})){toast('Check the amounts: the second price limit must be higher than the first, and the multipliers cannot be negative.','err');return;}
+  editRules(function(r){r.tiers=t;});
+  toast('Saved','ok');
+};
+window.removeExcludeRule=function(id){ editRules(function(r){r.exclude=r.exclude.filter(function(x){return String(x.id)!==String(id);});}); };
+function readRuleForm(){
+  var co=cleanCode((document.getElementById('ex_co')||{}).value);
+  var cat=((document.getElementById('ex_cat')||{}).value||'').trim();
+  var words=((document.getElementById('ex_name')||{}).value||'').split(',').map(function(w){return w.trim();}).filter(Boolean);
+  if(!co&&!cat&&!words.length) return null;
+  var rule={id:'r-'+Date.now()}, parts=[];
+  if(co){ rule.company=co; parts.push('company '+co); }
+  if(cat){ rule.category=cat; parts.push('category '+cat); }
+  if(words.length){ rule.nameHasAny=words; parts.push('name has '+words.join(' / ')); }
+  rule.label='Rule: '+parts.join(' + ');
+  return rule;
+}
+window.updateRuleMatch=function(){
+  var el=document.getElementById('ex_match'); if(!el) return;
+  var rule=readRuleForm();
+  if(!rule){el.innerHTML='';return;}
+  var hits=products.filter(function(p){return ruleMatches(rule,p);});
+  el.innerHTML='This rule matches <strong>'+hits.length+' item'+(hits.length===1?'':'s')+'</strong>'+
+    (hits.length?': '+hits.slice(0,3).map(function(p){return esc(p.name);}).join(', ')+(hits.length>3?' ...':''):'.');
+};
+window.addExcludeRule=function(){
+  var rule=readRuleForm();
+  if(!rule){toast('Fill at least one box: company code, category or name words.','err');return;}
+  if(!products.some(function(p){return ruleMatches(rule,p);})){toast('No item matches this rule.','err');return;}
+  editRules(function(r){r.exclude.push(rule);});
+};
+window.addExcludeProduct=function(id){
+  var p=products.find(function(x){return String(x._id)===String(id);}); if(!p) return;
+  editRules(function(r){r.exclude.push({id:'r-'+Date.now(),label:p.name,productId:String(p._id)});});
+  var box=document.getElementById('ex_prod'); if(box) box.focus();      // ready for the next product
+};
+
 function toggleNewRefFields(val){
   var wrap=document.getElementById('nc-new-ref-fields');
   if(wrap) wrap.style.display = (val==='__new__') ? 'block' : 'none';
@@ -3665,13 +4440,20 @@ function toggleNewRefFields(val){
 // (success or failure), so callers can safely chain a dependent save (like
 // adding a customer whose default reference is this brand-new one) without
 // racing a background pull that hasn't picked up the new reference yet.
-function createNewReference(name, baseId, cb){
-  var newId = String(Math.max.apply(null, REF_LIST.map(function(r){ return parseInt(r.id, 10) || 0; })) + 1);
+function createNewReference(name, baseId, cb, opts){
+  var newId = String(Math.max.apply(null, REF_LIST.map(function(r){ return parseInt(r.id, 10) || 0; })
+    .concat(lsGet('deletedRefIds', []).map(function(x){ return parseInt(x, 10) || 0; }))) + 1);
+  var inc = (opts && opts.pct > 0) ? opts : null;
+  var rules = getPriceRules();
 
-  // 1. Copy base prices to new ref for all products
+  // 1. Copy base prices to new ref for all products (with the percentage increase, except excluded items)
   products.forEach(function(p) {
     if (!p.prices) p.prices = {};
-    p.prices[newId] = p.prices[baseId] != null ? p.prices[baseId] : null;
+    var base = p.prices[baseId];
+    var np = base != null ? base : null;
+    if (inc && base != null && !excludedBy(p, rules)) np = increasedPrice(base, inc.pct, rules.tiers, inc.step);
+    if (opts && opts.edits && opts.edits[String(p._id)] !== undefined) np = opts.edits[String(p._id)];   // typed by hand in the preview
+    p.prices[newId] = np;
   });
 
   // 2. Update local ref map
@@ -3906,6 +4688,7 @@ window.addCust=function(){
     toast('Saving customer...','info');
     apiCall('addCustomer',{customer:newCust},function(res){
       if(res.status==='success'){
+        forgetCustDraft();
         toast('Customer added successfully!');
         gdPullFromScript();
       }else{
@@ -3920,10 +4703,16 @@ window.addCust=function(){
     newRefName=newRefName.trim();
     if(!newRefName){toast('New reference name is required!','err');return;}
     if(!newRefBase){toast('Pick a reference to copy prices from!','err');return;}
+    var pct=parseFloat((document.getElementById('nc_new_ref_pct')||{}).value)||0;
+    var step=parseFloat((document.getElementById('nc_new_ref_round')||{}).value)||1;
+    if(pct<0){toast('The increase % cannot be negative.','err');return;}
+    if(pct>0&&userRole!=='admin'){toast('Only an admin can add an increase %.','err');return;}
+    var edits=userRole==='admin'?Object.assign({},newRefEdits()):{};
     createNewReference(newRefName,newRefBase,function(newId){
       toast('Reference "'+newRefName+'" created (Ref #'+newId+')!');
+      window._newRefEdits={base:'',map:{}};
       saveCustomer(newId);
-    });
+    },{pct:pct,step:step,edits:edits});
   }else{
     saveCustomer(refVal);
   }
@@ -4512,7 +5301,7 @@ setInterval(function() {
   var activeTag = document.activeElement ? document.activeElement.tagName : '';
   if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') return;
   gdPullFromScriptSilently(function() {
-    renderPage(curTab);
+    refreshCurrentPage();
   });
 }, 20000);
 

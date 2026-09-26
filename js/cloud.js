@@ -365,6 +365,14 @@ var GLTCloud = (function () {
       case 'deleteCustomer':     // admin only; needs the internet (never queued, so nothing can come back later)
         return rpc('delete_customer', { p_id: String(d.customerId), p_delete_bills: !!d.deleteBills })
           .then(function (r) { return { status: 'success', billIds: (r && r.bill_ids) || [] }; });
+      case 'setPriceRules':      // admin only
+        return rpc('set_price_rules', { p_value: String(d.value) }).then(function () { return { status: 'success' }; });
+      case 'renameReference':    // admin only
+        return rpc('rename_reference', { p_id: String(d.refId), p_name: d.name }).then(function () { return { status: 'success' }; });
+      case 'setPricesBulk':      // admin only: Excel upload / edit price list
+        return rpc('set_prices_bulk', { p_items: d.items || [] }).then(function (r) { return { status: 'success', changed: r && r.changed, skipped: r && r.skipped }; });
+      case 'deleteReference':    // admin only; needs the internet
+        return rpc('delete_reference', { p_id: String(d.refId) }).then(function () { return { status: 'success' }; });
       case 'deleteBill':
         return rpc('delete_bill', { p_id: String(d.billId) }).then(function () { return { status: 'success' }; });
       case 'addReference':
