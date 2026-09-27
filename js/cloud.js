@@ -181,6 +181,23 @@ var GLTCloud = (function () {
     });
   }
 
+  // Checks the current password is right before a change is allowed to proceed. There is no
+  // separate "just check it" API, so this signs in again with it - on success the session is
+  // simply refreshed (same account, still logged in); on failure nothing changes.
+  function verifyMyPassword(oldPassword) {
+    if (!init()) return Promise.reject(new Error(configHelp()));
+    if (!profile || !profile.username) return Promise.reject(new Error('Not signed in'));
+    return sb.auth.signInWithPassword({ email: emailFor(profile.username), password: oldPassword }).then(function (r) {
+      if (r.error) {
+        var e = new Error(isNetErr(r.error) ? 'No internet connection' : 'Your current password is incorrect');
+        e.isNetwork = isNetErr(r.error);
+        throw e;
+      }
+      accessToken = r.data && r.data.session ? r.data.session.access_token : accessToken;
+      return true;
+    });
+  }
+
   // ---- product helpers -----------------------------------------------------
   function pid(p) { return String(p && p._id != null ? p._id : (p && p.id != null ? p.id : '')); }
   function stablePrices(pr) {
@@ -597,7 +614,8 @@ var GLTCloud = (function () {
   return {
     configured: configured, configHelp: configHelp, ready: ready, signedIn: signedIn,
     profile: function () { return profile; },
-    signIn: signIn, signOut: signOut, restore: restore, quickRestore: quickRestore, changePassword: changePassword, emailFor: emailFor,
+    signIn: signIn, signOut: signOut, restore: restore, quickRestore: quickRestore, changePassword: changePassword,
+    verifyMyPassword: verifyMyPassword, emailFor: emailFor,
     getData: getData, call: call, getReservations: getReservations, getBillLocks: getBillLocks,
     releaseOnUnload: releaseOnUnload, verifyPricePassword: verifyPricePassword, setPricePassword: setPricePassword,
     listStaff: listStaff, setStaffRole: setStaffRole, setStaffActive: setStaffActive,

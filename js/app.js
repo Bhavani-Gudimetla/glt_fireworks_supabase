@@ -5,7 +5,7 @@
    ========================================================================== */
 // Shown on the Home page so it's easy to tell which copy of the code is running.
 // Keep in step with the ?v= tags in GLT_Fireworks_NEW.html.
-var APP_VERSION='20260927-1';
+var APP_VERSION='20260927-5';
 
 // == STORAGE ==
 function lsGet(k,d){try{var v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch(e){return d;}}
@@ -87,6 +87,8 @@ var priceLookupRefs=['','',''];
 var INV_PER=48;
 var histSearch='';
 var settingsTab='general';
+var dashboardTab='overview';
+var customersTab=(lsGet('custDraft',null)?'add':'list');   // an unfinished "Add Customer" draft opens straight to it
 
 // == HELPERS ==
 function fmtMoney(n){return String.fromCharCode(8377)+Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});}
@@ -194,7 +196,7 @@ function saveAll(){
 // == TRANSLATIONS ==
 var T={
   en:{welcome:'Welcome back',home:'Home',dashboard:'Dashboard',billing:'New Estimate',inventory:'Inventory',priceLookupNav:'Price Lookup',customersNav:'Customers',pendingLoadsNav:'Pending Loads',history:'Estimate History',settings:'Settings',
-    totalProds:'Products',totalStock:'Stock',lowStock:'Low Stock',todayBills:"Today's Estimates",todayRev:"Today's Revenue",
+    home:'Home',totalProds:'Products',totalStock:'Stock',lowStock:'Low Stock',todayBills:"Today's Estimates",todayRev:"Today's Revenue",
     newBill:'Create New Estimate',customer:'Customer',refNum:'Reference No.',
     searchProd:'Type product code or name...',
     addItem:'Add to Estimate',cases:'No. of Cases',loose:'Loose Qty',
@@ -206,7 +208,7 @@ var T={
     filterAll:'All',filterLow:'Low Stock',filterOut:'No Stock',filterNeg:'Negative Stock',filterIn:'In Stock',
     step1:'Step 1: Customer & Reference',step2:'Step 2: Search & Add Products',step3:'Step 3: Review & Save'},
   te:{welcome:'తిరిగి స్వాగతం',home:'హోమ్',dashboard:'డ్యాష్‌బోర్డ్',billing:'కొత్త ఎస్టిమేట్',inventory:'స్టాక్',priceLookupNav:'ధర శోధన',customersNav:'కస్టమర్లు',pendingLoadsNav:'పెండింగ్ లోడ్స్',history:'ఎస్టిమేట్ చరిత్ర',settings:'సెట్టింగ్స్',
-    totalProds:'వస్తువులు',totalStock:'స్టాక్',lowStock:'తక్కువ స్టాక్',todayBills:'ఈరోజు ఎస్టిమేట్లు',todayRev:'ఈరోజు ఆదాయం',
+    home:'హోమ్',totalProds:'వస్తువులు',totalStock:'స్టాక్',lowStock:'తక్కువ స్టాక్',todayBills:'ఈరోజు ఎస్టిమేట్లు',todayRev:'ఈరోజు ఆదాయం',
     newBill:'కొత్త ఎస్టిమేట్ చేయి',customer:'కస్టమర్',refNum:'రెఫరెన్స్ నం.',
     searchProd:'కోడ్ లేదా వస్తువు పేరు టైప్ చేయండి...',
     addItem:'జోడించు',cases:'పెట్టెల సంఖ్య',loose:'వదులు పరిమాణం',
@@ -331,6 +333,9 @@ function goTabNoSync(id) {
 
 // Direct home navigation - bypasses all guards
 // Works from anywhere including billing/edit mode
+// Small round arrow shown at the top-left of every page except Home itself.
+function backBtn(){ return '<button class="back-btn" onclick="exitToHome()" title="Back to Home">&#8592;</button>'; }
+
 function exitToHome(){
   try {
     // Close any open modal first
@@ -361,6 +366,25 @@ function exitToHome(){
     window.location.reload();
   }
 }
+
+// == SITE MENU (nav "Home" button) - a left-sliding panel listing every page, like a hamburger menu ==
+function openNavMenu(){
+  closeNavMenu();
+  var visible = userRole==='employee' ? NAV_TABS.filter(function(tb){return tb.id!=='settings';}) : NAV_TABS;
+  var rows = '<div class="nav-menu-item'+(curTab==='home'?' on':'')+'" onclick="navMenuGo(\'home\')"><span class="ico">&#127968;</span><span>'+t('home')+'</span></div>'+
+    visible.map(function(tb){
+      return '<div class="nav-menu-item'+(curTab===tb.id?' on':'')+'" onclick="navMenuGo(\''+tb.id+'\')"><span class="ico">'+tb.icon+'</span><span>'+t(tb.key)+'</span></div>';
+    }).join('');
+  var ov=document.createElement('div'); ov.className='drawer-ov left'; ov.id='nav-drawer-ov';
+  ov.innerHTML='<div class="drawer" id="nav-drawer">'+
+    '<div class="drawer-hdr"><h2 class="sec-title" style="margin:0;font-size:20px">&#9776; Menu</h2><button class="modal-x" onclick="closeNavMenu()">&#10005;</button></div>'+
+    '<div style="margin-top:14px">'+rows+'</div>'+
+  '</div>';
+  ov.addEventListener('mousedown',function(e){ if(e.target===ov) closeNavMenu(); });
+  document.body.appendChild(ov);
+}
+function closeNavMenu(){ var o=document.getElementById('nav-drawer-ov'); if(o) o.remove(); }
+function navMenuGo(id){ closeNavMenu(); if(id==='home') exitToHome(); else goTab(id); }
 
 function goTab(id){
   if(userRole === 'employee' && id === 'settings') {
@@ -798,9 +822,9 @@ function renderDashboard(){
   }
 
   var isAdmin = userRole === 'admin';
+  var alertCount = negItems.length + outItems.length + lowItems.length;
 
-  el.innerHTML=
-    '<div style="margin-bottom:18px"><h2 class="sec-title" style="margin-bottom:4px">&#128202; '+t('dashboard')+'</h2><p style="color:var(--text-muted);font-size:14px">'+todayDisp()+' &middot; GLT Fireworks, Gollagunta</p></div>'+
+  var overviewHtml =
     '<div class="stats">'+
       '<div class="stat" style="border-top:3px solid var(--brand)"><div class="n" style="color:var(--brand)">'+products.length+'</div><div class="l">'+t('totalProds')+'</div></div>'+
       '<div class="stat" style="border-top:3px solid var(--info)"><div class="n" style="color:var(--info)">'+fmtNum(totalStock)+'</div><div class="l">'+t('totalStock')+'</div></div>'+
@@ -810,16 +834,15 @@ function renderDashboard(){
       '<div class="stat" style="border-top:3px solid var(--success)"><div class="n" style="color:var(--success)">'+todayBills.length+'</div><div class="l">'+t('todayBills')+'</div></div>'+
       (isAdmin?'<div class="stat" style="border-top:3px solid var(--purple)"><div class="n" style="color:var(--purple)">'+fmtMoney(todayRev)+'</div><div class="l">'+t('todayRev')+'</div></div>':'')+
     '</div>'+
-    
-    '<div class="grid2" style="margin-bottom:14px">'+
+    '<div class="grid2" style="margin-bottom:0">'+
       '<button class="btn btn-r btn-lg" style="justify-content:center;width:100%;font-weight:700" onclick="goTab(\'billing\')">&#129534; '+t('newBill')+'</button>'+
       '<button class="btn btn-b btn-lg" style="justify-content:center;width:100%;font-weight:700" onclick="goTab(\'inventory\')">&#128230; '+t('inventory')+'</button>'+
-    '</div>'+
-    
-    negHtml +
-    critAlertHtml +
-    lowHtml +
-    
+    '</div>';
+
+  var alertsHtml = (negHtml+critAlertHtml+lowHtml) ||
+    '<div class="empty" style="padding:24px"><div class="empty-ico">&#9989;</div><div class="empty-txt">No alerts right now.</div></div>';
+
+  var analyticsHtml =
     (isAdmin?'<div class="grid2" style="margin-bottom:14px;grid-template-columns: 2fr 1fr;gap:14px;align-items:stretch">'+
       '<div class="card" style="margin-bottom:0;display:flex;flex-direction:column">'+
         '<div class="card-title">&#128200; Monthly Revenue Analysis</div>'+
@@ -832,20 +855,31 @@ function renderDashboard(){
         topCustHtml +
       '</div>'+
     '</div>':'')+
+    '<div class="card" style="margin-bottom:0"><div class="card-title">&#128201; Top Performing Items</div>'+
+      '<div style="display:flex;flex-direction:column;gap:4px">'+topItemsHtml+'</div></div>';
 
-    '<div class="grid2" style="margin-bottom:14px;grid-template-columns: 1fr 1fr;gap:14px">'+
-      '<div class="card" style="margin-bottom:0">'+
-        '<div class="card-title">&#128201; Top Performing Items</div>'+
-        '<div style="display:flex;flex-direction:column;gap:4px">'+topItemsHtml+'</div>'+
-      '</div>'+
-      '<div class="card" style="margin-bottom:0">'+
-        '<div class="card-title">&#129534; Recent Estimates</div>'+
-        recentHtml +
-      '</div>'+
+  var recentTabHtml = '<div class="card" style="margin-bottom:0"><div class="card-title">&#129534; Recent Estimates</div>'+recentHtml+'</div>';
+
+  var dashContent = dashboardTab==='alerts'?alertsHtml : dashboardTab==='analytics'?analyticsHtml : dashboardTab==='recent'?recentTabHtml : overviewHtml;
+
+  el.innerHTML=
+    '<div style="margin-bottom:18px"><h2 class="sec-title" style="margin-bottom:4px;display:flex;align-items:center">'+backBtn()+'&#128202; '+t('dashboard')+'</h2><p style="color:var(--text-muted);font-size:14px">'+todayDisp()+' &middot; GLT Fireworks, Gollagunta</p></div>'+
+    '<div class="side-layout">'+
+      '<div class="side-nav">'+buildDashNavHtml(alertCount)+'</div>'+
+      '<div class="side-content">'+dashContent+'</div>'+
     '</div>';
 
-  setTimeout(initDashboardChart, 50);
+  if(dashboardTab==='analytics') setTimeout(initDashboardChart, 50);
 }
+function buildDashNavHtml(alertCount){
+  var items=[['overview','&#128200;','Overview'],['alerts','&#9888;&#65039;','Alerts'],['analytics','&#128202;','Analytics'],['recent','&#129534;','Recent Estimates']];
+  return items.map(function(x){
+    var badge=(x[0]==='alerts'&&alertCount)?'<span class="tag tag-r" style="flex-shrink:0">'+alertCount+'</span>':'';
+    return '<button type="button" class="side-nav-item'+(dashboardTab===x[0]?' on':'')+'" onclick="setDashTab(\''+x[0]+'\')">'+
+      '<span class="lbl-main"><span>'+x[1]+'</span><span>'+x[2]+'</span></span>'+badge+'</button>';
+  }).join('');
+}
+function setDashTab(t){ dashboardTab=t; renderDashboard(); }
 
 function showNegativeStockModal(){
   var negItems=products.filter(function(p){return (p.stock||0)<0;}).sort(function(a,b){return (a.stock||0)-(b.stock||0);});
@@ -1340,7 +1374,7 @@ function renderBilling(){
     '</div>';
   }
   el.innerHTML=editModeBar+
-    '<div class="sec-hdr"><h2 class="sec-title">&#129534; '+t('billing')+'</h2><span class="tag tag-r">#'+billNum+'</span></div>'+
+    '<div class="sec-hdr"><h2 class="sec-title" style="display:flex;align-items:center">'+backBtn()+'&#129534; '+t('billing')+'</h2><span class="tag tag-r">#'+billNum+'</span></div>'+
     '<div class="card bill-top" id="bill-top">'+buildBillTopHtml()+'</div>'+
     '<div class="bill-search-sticky" id="bill-search-wrap">'+
       '<div class="srch-wrap">'+
@@ -2629,7 +2663,7 @@ function renderInventory(){
   }).join('');
 
   el.innerHTML=
-    '<div class="sec-hdr"><h2 class="sec-title">&#128230; '+t('inventory')+'</h2>'+(userRole==='admin'?'<button class="btn btn-r" onclick="showAddModal()">&#10010; '+t('addProd')+'</button>':'')+'</div>'+
+    '<div class="sec-hdr"><h2 class="sec-title" style="display:flex;align-items:center">'+backBtn()+'&#128230; '+t('inventory')+'</h2>'+(userRole==='admin'?'<button class="btn btn-r" onclick="showAddModal()">&#10010; '+t('addProd')+'</button>':'')+'</div>'+
     '<div class="card" style="margin-bottom:12px">'+
       '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
         '<div class="srch-wrap" style="flex:1;min-width:200px"><span class="srch-ico">&#128269;</span><input class="srch-inp" id="inv-srch" value="'+esc(invSearch)+'" placeholder="Type a code, name or category..."></div>'+
@@ -3184,7 +3218,7 @@ function renderHistoryList(){
 function renderHistory(){
   var el=document.getElementById('pg-history');
   el.innerHTML=
-    '<div class="sec-hdr"><h2 class="sec-title">&#128203; '+t('history')+'</h2><span class="tag tag-gy">'+bills.length+' bills</span></div>'+
+    '<div class="sec-hdr"><h2 class="sec-title" style="display:flex;align-items:center">'+backBtn()+'&#128203; '+t('history')+'</h2><span class="tag tag-gy">'+bills.length+' bills</span></div>'+
     '<div class="card" style="margin-bottom:12px"><div class="srch-wrap"><span class="srch-ico">&#128269;</span>'+
     '<input class="srch-inp" id="hist-srch" value="'+esc(histSearch)+'" placeholder="Search customer, estimate no..."></div></div>'+
     '<div id="hist-results"></div>';
@@ -3209,12 +3243,16 @@ function delBill(id){
 // == SETTINGS ==
 function renderSettings(){
   var el=document.getElementById('pg-settings');
-  var tabBtns=[['general','General'],['stock','&#128230; Stock'],['data','Data & Sync'],['users','Users']].map(function(x){
-    return '<button class="btn '+(settingsTab===x[0]?'btn-r':'btn-gh')+'" onclick="setStab(\''+x[0]+'\')">'+x[1]+'</button>';
+  var items=[['general','&#127760;','General'],['stock','&#128230;','Stock'],['data','&#9729;&#65039;','Data & Sync'],['users','&#128101;','Users']];
+  var navHtml=items.map(function(x){
+    return '<button type="button" class="side-nav-item'+(settingsTab===x[0]?' on':'')+'" onclick="setStab(\''+x[0]+'\')">'+
+      '<span class="lbl-main"><span>'+x[1]+'</span><span>'+x[2]+'</span></span></button>';
   }).join('');
-  el.innerHTML='<h2 class="sec-title" style="margin-bottom:13px">&#9881;&#65039; '+t('settings')+'</h2>'+
-    '<div style="display:flex;gap:8px;margin-bottom:14px;border-bottom:2px solid var(--card-border);padding-bottom:8px;flex-wrap:wrap">'+tabBtns+'</div>'+
-    '<div id="stab-body"></div>';
+  el.innerHTML='<h2 class="sec-title" style="margin-bottom:13px;display:flex;align-items:center">'+backBtn()+'&#9881;&#65039; '+t('settings')+'</h2>'+
+    '<div class="side-layout">'+
+      '<div class="side-nav">'+navHtml+'</div>'+
+      '<div class="side-content" id="stab-body"></div>'+
+    '</div>';
   renderStab();
 }
 
@@ -3280,7 +3318,7 @@ function renderPriceLookup(){
       '<select class="inp" id="pl-ref-'+i+'" onchange="setPriceLookupRef('+i+',this.value)">'+refOpts+'</select></div>';
   }).join('');
   el.innerHTML=
-    '<h2 class="sec-title" style="margin-bottom:13px">&#128269; '+t('priceLookupNav')+'</h2>'+
+    '<h2 class="sec-title" style="margin-bottom:13px;display:flex;align-items:center">'+backBtn()+'&#128269; '+t('priceLookupNav')+'</h2>'+
     '<div class="card"><div class="card-title">Compare up to 3 References</div>'+
       '<div class="grid2" style="grid-template-columns:repeat(3,1fr)">'+refSelects+'</div>'+
       '<div class="fg" style="margin-top:6px"><div class="srch-wrap"><span class="srch-ico">&#128269;</span>'+
@@ -3333,6 +3371,22 @@ window.clearCustForm=function(){
 };
 
 // ---- price lists (references): overview and delete ----
+function miniSearchHtml(id,placeholder,value){
+  return '<div class="mini-search'+(value?' open':'')+'" id="'+id+'-box">'+
+    '<input class="inp" id="'+id+'-inp" value="'+esc(value||'')+'" placeholder="'+esc(placeholder)+'" autocomplete="off">'+
+    '<button type="button" class="icon-btn" onclick="toggleMiniSearch(\''+id+'\')" title="Search">&#128269;</button></div>';
+}
+function toggleMiniSearch(id){
+  var box=document.getElementById(id+'-box'), inp=document.getElementById(id+'-inp');
+  if(!box||!inp) return;
+  var open=box.classList.toggle('open');
+  if(open) inp.focus(); else { inp.value=''; inp.dispatchEvent(new Event('input')); }
+}
+function wireMiniSearch(id,onInput){
+  var inp=document.getElementById(id+'-inp');
+  if(inp && !inp._wired){ inp._wired=true; inp.addEventListener('input',function(e){ onInput(e.target.value); }); }
+}
+
 function refUsage(id){
   id=String(id);
   return {
@@ -3341,9 +3395,10 @@ function refUsage(id){
     ests: bills.filter(function(b){return String(b.referenceNumber)===id;}).length
   };
 }
-function buildRefCard(){
-  if(userRole!=='admin') return '';
-  var rows=REF_LIST.map(function(r){
+var refListSearch='';
+function buildRefRowsHtml(list){
+  if(!list.length) return '<div style="color:var(--text-muted);padding:4px 2px">'+(refListSearch?('No price list matches "'+esc(refListSearch)+'"'):'No price lists.')+'</div>';
+  return list.map(function(r){
     var u=refUsage(r.id), orig=isOriginalRef(r.id), sid=esc(String(r.id));
     return '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;border:1px solid var(--card-border);border-radius:10px;margin-bottom:6px;background:var(--card-bg-2)">'+
       '<div><span class="tag tag-r">#'+esc(r.id)+'</span> <strong>'+esc(r.name)+'</strong>'+(orig?' <span class="tag tag-gy" title="The four original price lists can be changed with the Excel download / upload, but not renamed or deleted">original</span>':'')+
@@ -3353,14 +3408,26 @@ function buildRefCard(){
         '<button class="btn btn-del btn-sm" onclick="deleteReferenceUi(\''+sid+'\')">&#128465; Delete</button></div>')+
     '</div>';
   }).join('');
-  return '<div class="card"><div class="card-title">&#128178; Price References ('+REF_LIST.length+')</div>'+
+}
+function filteredRefList(){
+  var q=(refListSearch||'').trim().toLowerCase();
+  if(!q) return REF_LIST;
+  return REF_LIST.filter(function(r){ return String(r.id).toLowerCase().indexOf(q)>=0 || (r.name||'').toLowerCase().indexOf(q)>=0; });
+}
+function updateRefListOnly(){
+  var box=document.getElementById('ref-list-rows');
+  if(box) box.innerHTML=buildRefRowsHtml(filteredRefList());
+}
+function buildRefCard(){
+  if(userRole!=='admin') return '';
+  return '<div class="card"><div class="card-title with-search"><span>&#128178; Price References ('+REF_LIST.length+')</span>'+miniSearchHtml('ref-search','Search price lists...',refListSearch)+'</div>'+
     '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
       '<button class="btn btn-b btn-sm" onclick="downloadPriceExcel()">&#8681; Download all prices (Excel)</button>'+
       '<button class="btn btn-o btn-sm" onclick="document.getElementById(\'price-xlsx-file\').click()">&#8679; Upload edited Excel</button>'+
       '<input type="file" id="price-xlsx-file" accept=".xlsx" style="display:none" onchange="uploadPriceExcel(this)">'+
     '</div>'+
     '<div style="font-size:13.5px;color:var(--text-muted);margin-bottom:10px">Deleting a price list never changes estimates that are already saved. Change prices of any list (including the four original ones) by downloading the Excel, editing the yellow cells and uploading it again.</div>'+
-    (rows||'<div style="color:var(--text-muted)">No price lists.</div>')+'</div>';
+    '<div id="ref-list-rows">'+buildRefRowsHtml(filteredRefList())+'</div></div>';
 }
 
 // ---- edit a price list you created: same properties as when it was made ----
@@ -3676,29 +3743,50 @@ window.confirmDeleteReference=function(id){
   });
 };
 
-function renderCustomersPage(){
-  var el=document.getElementById('pg-customers');
-  var isAdmin=userRole==='admin';
-  var refOpts=REF_LIST.map(function(r){return '<option value="'+r.id+'">#'+r.id+' — '+esc(r.name)+'</option>';}).join('');
-  var custCards=customers.map(function(c){
-    var idAttr=esc(String(c._id||''));
-    var extraLine=[c.aadhar?'Aadhar: '+esc(c.aadhar):'',c.gst?'GST: '+esc(c.gst):'',c.contact2?'Alt: '+esc(c.contact2):''].filter(function(x){return x;}).join(' &middot; ');
-    return '<div style="background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">'+
-      '<div><div style="font-weight:700">'+esc(c.name)+'</div>'+
-      '<div style="font-size:14px;color:var(--text-muted);margin-top:3px">'+esc(c.address||'')+(c.contact?' &middot; '+esc(c.contact):'')+'</div>'+
-      (extraLine?'<div style="font-size:13px;color:var(--text-muted);margin-top:2px">'+extraLine+'</div>':'')+
-      '</div>'+
-      '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'+
-        (c.defaultRef?'<span class="tag tag-r">Ref #'+c.defaultRef+'</span>':'<span class="tag tag-o" title="Open Edit and choose a Default Ref">&#9888; No price list</span>')+
-        (isAdmin?'<button class="btn btn-b btn-sm" onclick="showCustomerSummary(\''+idAttr+'\')">&#128202; Summary</button>':'')+
-        '<button class="btn btn-gh btn-sm" onclick="editCustomer(\''+idAttr+'\')">&#9999; Edit</button>'+
-        (isAdmin?'<button class="btn btn-del btn-sm" onclick="deleteCustomerUi(\''+idAttr+'\')">&#128465; Delete</button>':'')+
-      '</div>'+
-    '</div>';
+var custListSearch='';
+function buildCustCardHtml(c){
+  var isAdmin=userRole==='admin', idAttr=esc(String(c._id||''));
+  var extraLine=[c.aadhar?'Aadhar: '+esc(c.aadhar):'',c.gst?'GST: '+esc(c.gst):'',c.contact2?'Alt: '+esc(c.contact2):''].filter(function(x){return x;}).join(' &middot; ');
+  return '<div style="background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;padding:12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">'+
+    '<div><div style="font-weight:700">'+esc(c.name)+'</div>'+
+    '<div style="font-size:14px;color:var(--text-muted);margin-top:3px">'+esc(c.address||'')+(c.contact?' &middot; '+esc(c.contact):'')+'</div>'+
+    (extraLine?'<div style="font-size:13px;color:var(--text-muted);margin-top:2px">'+extraLine+'</div>':'')+
+    '</div>'+
+    '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'+
+      (c.defaultRef?'<span class="tag tag-r">Ref #'+c.defaultRef+'</span>':'<span class="tag tag-o" title="Open Edit and choose a Default Ref">&#9888; No price list</span>')+
+      (isAdmin?'<button class="btn btn-b btn-sm" onclick="showCustomerSummary(\''+idAttr+'\')">&#128202; Summary</button>':'')+
+      '<button class="btn btn-gh btn-sm" onclick="editCustomer(\''+idAttr+'\')">&#9999; Edit</button>'+
+      (isAdmin?'<button class="btn btn-del btn-sm" onclick="deleteCustomerUi(\''+idAttr+'\')">&#128465; Delete</button>':'')+
+    '</div>'+
+  '</div>';
+}
+function filteredCustomerList(){
+  var q=(custListSearch||'').trim().toLowerCase();
+  if(!q) return customers;
+  return customers.filter(function(c){
+    return (c.name||'').toLowerCase().indexOf(q)>=0 || (c.contact||'').toLowerCase().indexOf(q)>=0 ||
+           (c.contact2||'').toLowerCase().indexOf(q)>=0 || (c.address||'').toLowerCase().indexOf(q)>=0;
+  });
+}
+function buildCustCardsHtml(list){
+  if(!list.length) return '<div class="empty" style="padding:16px"><div class="empty-txt">'+(custListSearch?('No customer matches "'+esc(custListSearch)+'"'):'No customers yet.')+'</div></div>';
+  return list.map(buildCustCardHtml).join('');
+}
+function updateCustCardsOnly(){
+  var box=document.getElementById('cust-cards-list');
+  if(box) box.innerHTML=buildCustCardsHtml(filteredCustomerList());
+}
+function buildCustNavHtml(){
+  var items=[['add','&#10010;','Add Customer'],['list','&#128101;','All Customers ('+customers.length+')']];
+  if(userRole==='admin') items.splice(1,0,['refs','&#128178;','Price References ('+REF_LIST.length+')']);
+  return items.map(function(x){
+    return '<button type="button" class="side-nav-item'+(customersTab===x[0]?' on':'')+'" onclick="setCustTab(\''+x[0]+'\')">'+
+      '<span class="lbl-main"><span>'+x[1]+'</span><span>'+x[2]+'</span></span></button>';
   }).join('');
-  el.innerHTML=
-    '<h2 class="sec-title" style="margin-bottom:13px">&#128101; '+t('customersNav')+'</h2>'+
-    '<div class="card"><div class="card-title">&#10010; Add New Customer</div>'+
+}
+function setCustTab(t){ customersTab=t; renderCustomersPage(); }
+function buildAddCustFormHtml(isAdmin,refOpts){
+  return '<div class="card"><div class="card-title">&#10010; Add New Customer</div>'+
       '<div class="grid2">'+
         '<div class="fg"><label class="lbl">Name *</label><input class="inp" id="nc_name" placeholder="Customer name"></div>'+
         '<div class="fg"><label class="lbl">Contact 1</label><input class="inp" id="nc_ph" placeholder="Phone"></div>'+
@@ -3724,11 +3812,28 @@ function renderCustomersPage(){
       '</div>'+
       '<button class="btn btn-r" style="margin-top:10px" onclick="addCust()">&#10010; Add Customer</button> '+
       '<button class="btn btn-gh btn-sm" style="margin-top:10px" onclick="clearCustForm()">Clear form</button>'+
-    '</div>'+
-    buildRefCard()+
-    '<div class="card"><div class="card-title">&#128101; All Customers ('+customers.length+')</div>'+custCards+'</div>';
+    '</div>';
+}
+function buildCustListCardHtml(){
+  return '<div class="card"><div class="card-title with-search"><span>&#128101; All Customers ('+customers.length+')</span>'+miniSearchHtml('cust-search','Search customers...',custListSearch)+'</div>'+
+    '<div id="cust-cards-list">'+buildCustCardsHtml(filteredCustomerList())+'</div></div>';
+}
+function renderCustomersPage(){
+  var el=document.getElementById('pg-customers');
+  var isAdmin=userRole==='admin';
+  var refOpts=REF_LIST.map(function(r){return '<option value="'+r.id+'">#'+r.id+' — '+esc(r.name)+'</option>';}).join('');
+  if(customersTab==='refs'&&!isAdmin) customersTab='list';
+  var content = customersTab==='add'?buildAddCustFormHtml(isAdmin,refOpts) : customersTab==='refs'?buildRefCard() : buildCustListCardHtml();
+  el.innerHTML=
+    '<h2 class="sec-title" style="margin-bottom:13px;display:flex;align-items:center">'+backBtn()+'&#128101; '+t('customersNav')+'</h2>'+
+    '<div class="side-layout">'+
+      '<div class="side-nav">'+buildCustNavHtml()+'</div>'+
+      '<div class="side-content">'+content+'</div>'+
+    '</div>';
   el.oninput=saveCustDraft; el.onchange=saveCustDraft;
   if(restoreCustDraft()) toast('Your unfinished customer form was restored.','info');
+  wireMiniSearch('cust-search',function(v){ custListSearch=v; updateCustCardsOnly(); });
+  wireMiniSearch('ref-search',function(v){ refListSearch=v; updateRefListOnly(); });
 }
 
 var pendingLoadsSearch='';
@@ -3754,27 +3859,6 @@ function buildPendingLoadsData(){
     });
   });
   return {byCustomer:byCustomer,byItem:byItem};
-}
-
-function buildPendingCustCardsHtml(names,data){
-  if(!names.length)return '<div class="empty" style="padding:16px"><div class="empty-txt">No customers match "'+esc(pendingLoadsSearch)+'"</div></div>';
-  return names.map(function(cn){
-    var c=data.byCustomer[cn];
-    var itemRows=Object.keys(c.items).sort().map(function(pname){
-      var it=c.items[pname];
-      return '<tr><td style="font-weight:600;font-size:14px">'+esc(pname)+'</td><td class="num" style="font-weight:700;color:var(--red-text)">'+fmtNum(it.qty)+' '+esc(it.uom)+'</td></tr>';
-    }).join('');
-    return '<div class="card" style="margin-bottom:10px">'+
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">'+
-        '<div class="card-title" style="margin-bottom:0">&#128100; '+esc(cn)+'</div>'+
-        '<div style="display:flex;align-items:center;gap:6px">'+
-          '<span class="tag tag-r">'+fmtNum(c.total)+' pending</span>'+
-          '<button class="btn btn-b btn-sm" onclick="showPendingLoadsCustomerDetail(\''+esc(cn).replace(/'/g,"\\'")+'\')">&#128202; View / Print / Share</button>'+
-        '</div>'+
-      '</div>'+
-      '<div class="tbl-wrap"><table class="tbl"><tbody>'+itemRows+'</tbody></table></div>'+
-    '</div>';
-  }).join('');
 }
 
 // Per-bill, dated breakdown of one customer's pending items — used by the
@@ -3838,25 +3922,6 @@ function buildPendingLoadsCustomerHTML(customerName,data){
     '</body></html>';
 }
 
-window.showPendingLoadsCustomerDetail=function(customerName){
-  var data=buildPendingLoadsByBillForCustomer(customerName);
-  var rows=data.rows.map(function(r){return buildPendingStmtBillHtml(r,false);}).join('');
-  showModal(
-    '<div class="modal" style="max-width:980px">'+
-    '<div class="modal-hdr"><span class="modal-title">&#9203; '+esc(customerName)+' — Pending Loads</span><button class="modal-x" onclick="closeModal()">&#10005;</button></div>'+
-    '<div class="modal-body">'+
-      (data.rows.length?rows+
-        '<div style="text-align:right;margin-top:10px;font-weight:800;font-size:15px;color:#dc2626">Grand Total Pending: '+fmtNum(data.grandTotal)+' units</div>'
-        :'<div class="empty" style="padding:16px"><div class="empty-txt">Nothing pending for this customer.</div></div>')+
-    '</div>'+
-    '<div class="modal-ftr">'+
-      '<button class="btn btn-gh" onclick="closeModal()">Close</button>'+
-      '<button class="btn btn-b" onclick="printPendingLoadsCustomer(\''+esc(customerName).replace(/'/g,"\\'")+'\')">&#128424; Print</button>'+
-      '<button class="btn" style="background:#25D366;color:#fff" onclick="sharePendingLoadsCustomerWhatsApp(\''+esc(customerName).replace(/'/g,"\\'")+'\')">&#128241; Share via WhatsApp</button>'+
-    '</div></div>'
-  );
-};
-
 function printPendingLoadsCustomer(customerName){
   var data=buildPendingLoadsByBillForCustomer(customerName);
   var w=window.open('','_blank','width=900,height=700');
@@ -3883,67 +3948,120 @@ function sharePendingLoadsCustomerWhatsApp(customerName){
   });
 }
 
+var pendingLoadsSelected=null;   // customer name, or null = show "Total by Item"
+
+// compact rows for the left panel (name + pending total) - replaces the old full-detail cards
+function buildPendingCustNavHtml(names,data){
+  if(!names.length) return '<div style="color:var(--text-muted);font-size:14px;padding:8px 6px">No customers match "'+esc(pendingLoadsSearch)+'"</div>';
+  return names.map(function(cn){
+    var c=data.byCustomer[cn];
+    return '<button type="button" class="side-nav-item'+(pendingLoadsSelected===cn?' on':'')+'" onclick="selectPendingLoadsCustomer(\''+esc(cn).replace(/'/g,"\\'")+'\')">'+
+      '<span class="lbl-main"><span>&#128100;</span><span>'+esc(cn)+'</span></span>'+
+      '<span class="tag tag-r" style="flex-shrink:0">'+fmtNum(c.total)+'</span></button>';
+  }).join('');
+}
+function filteredPendingCustNames(data){
+  var q=(pendingLoadsSearch||'').trim().toLowerCase();
+  return Object.keys(data.byCustomer).sort().filter(function(cn){
+    if(!q) return true;
+    if(cn.toLowerCase().indexOf(q)>=0) return true;
+    var cd=data.byCustomer[cn];
+    return cd&&cd.items&&Object.keys(cd.items).some(function(pname){return pname.toLowerCase().indexOf(q)>=0;});
+  });
+}
+function paintPendingLoadsNav(){
+  var data=buildPendingLoadsData();
+  var totalsBtn=document.getElementById('pl-nav-totals');
+  if(totalsBtn) totalsBtn.classList.toggle('on', !pendingLoadsSelected);
+  var box=document.getElementById('pl-cust-nav');
+  if(box) box.innerHTML=buildPendingCustNavHtml(filteredPendingCustNames(data),data);
+}
+window.selectPendingLoadsCustomer=function(name){ pendingLoadsSelected=name; paintPendingLoadsNav(); paintPendingLoadsDetail(); };
+window.selectPendingLoadsTotals=function(){ pendingLoadsSelected=null; paintPendingLoadsNav(); paintPendingLoadsDetail(); };
+
+// Right-hand panel: either the selected customer's per-bill breakdown (with Print / WhatsApp,
+// same as before) or, with nothing selected, the "Total Pending by Item" table. Both are filtered
+// by the same search box the customer list uses, so typing a product name narrows this panel too.
+function paintPendingLoadsDetail(){
+  var el=document.getElementById('pl-detail'); if(!el) return;
+  var data=buildPendingLoadsData();
+  var q=(pendingLoadsSearch||'').trim().toLowerCase();
+  if(pendingLoadsSelected && data.byCustomer[pendingLoadsSelected]){
+    var name=pendingLoadsSelected, nameJs=esc(name).replace(/'/g,"\\'");
+    var d=buildPendingLoadsByBillForCustomer(name);
+    var shownRows=d.rows, shownTotal=d.grandTotal, filtering=false;
+    if(q){
+      filtering=true;
+      shownRows=[]; shownTotal=0;
+      d.rows.forEach(function(r){
+        var items=r.items.filter(function(it){return it.name.toLowerCase().indexOf(q)>=0;});
+        if(!items.length) return;
+        var billTotal=items.reduce(function(s,it){return s+it.qty;},0);
+        shownRows.push(Object.assign({},r,{items:items,billTotal:billTotal}));
+        shownTotal+=billTotal;
+      });
+    }
+    var rows=shownRows.map(function(r){return buildPendingStmtBillHtml(r,false);}).join('');
+    el.innerHTML='<div class="card">'+
+      '<div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'+
+        '<span>&#9203; '+esc(name)+'</span>'+
+        '<div style="display:flex;gap:8px">'+
+          '<button class="btn btn-b btn-sm" onclick="printPendingLoadsCustomer(\''+nameJs+'\')">&#128424; Print</button>'+
+          '<button class="btn btn-sm" style="background:#25D366;color:#fff" onclick="sharePendingLoadsCustomerWhatsApp(\''+nameJs+'\')">&#128241; WhatsApp</button>'+
+        '</div>'+
+      '</div>'+
+      (filtering?'<div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">Showing items matching "'+esc(pendingLoadsSearch)+'"</div>':'')+
+      (shownRows.length?rows+'<div style="text-align:right;margin-top:10px;font-weight:800;font-size:15px;color:var(--red-text)">'+(filtering?'Total Matching':'Grand Total Pending')+': '+fmtNum(shownTotal)+' units</div>'
+        :'<div class="empty" style="padding:16px"><div class="empty-txt">'+(filtering?'No pending item matches "'+esc(pendingLoadsSearch)+'" for this customer.':'Nothing pending for this customer.')+'</div></div>')+
+    '</div>';
+  }else{
+    var itemNames=Object.keys(data.byItem).sort().filter(function(pname){return !q || pname.toLowerCase().indexOf(q)>=0;});
+    var grandTotal=0;
+    itemNames.forEach(function(k){grandTotal+=data.byItem[k].qty;});
+    var itemTotalRows=itemNames.map(function(pname){
+      var it=data.byItem[pname];
+      return '<tr><td style="font-weight:600;font-size:14px">'+esc(pname)+'</td><td class="num" style="font-weight:800;color:var(--red-text)">'+fmtNum(it.qty)+' '+esc(it.uom)+'</td></tr>';
+    }).join('');
+    var custCount=Object.keys(data.byCustomer).length;
+    el.innerHTML='<div class="card"><div class="card-title">&#128202; Total Pending by Item ('+fmtNum(grandTotal)+' units'+(q?' matching "'+esc(pendingLoadsSearch)+'"':' across '+custCount+' customer'+(custCount===1?'':'s'))+')</div>'+
+      (itemTotalRows?'<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Item</th><th style="text-align:right">Total Pending</th></tr></thead><tbody>'+itemTotalRows+'</tbody></table></div>'
+        :'<div class="empty" style="padding:16px"><div class="empty-txt">'+(q?'No pending item matches "'+esc(pendingLoadsSearch)+'".':'Nothing pending.')+'</div></div>')+
+    '</div>';
+  }
+}
+
 function renderPendingLoads(){
   var el=document.getElementById('pg-pendingloads');
   var data=buildPendingLoadsData();
   var custNames=Object.keys(data.byCustomer).sort();
 
   if(!custNames.length){
-    el.innerHTML='<h2 class="sec-title" style="margin-bottom:13px">&#9203; Pending Loads</h2>'+
+    el.innerHTML='<h2 class="sec-title" style="margin-bottom:13px;display:flex;align-items:center">'+backBtn()+'&#9203; Pending Loads</h2>'+
       '<div class="empty" style="padding:24px"><div class="empty-ico">&#9989;</div><div class="empty-txt">Nothing pending — every bill is fully loaded.</div></div>';
     return;
   }
-
-  var q=(pendingLoadsSearch||'').trim().toLowerCase();
-  // Search by customer name OR by product name inside their pending items
-  var filteredNames=custNames.filter(function(cn){
-    if(!q) return true;
-    if(cn.toLowerCase().indexOf(q)>=0) return true;
-    // Also match if any pending item name contains the query
-    var custData=data.byCustomer[cn];
-    if(custData && custData.items){
-      return Object.keys(custData.items).some(function(pname){
-        return pname.toLowerCase().indexOf(q)>=0;
-      });
-    }
-    return false;
-  });
-
-  var grandTotal=0;
-  Object.keys(data.byItem).forEach(function(k){grandTotal+=data.byItem[k].qty;});
-  var itemTotalRows=Object.keys(data.byItem).sort().map(function(pname){
-    var it=data.byItem[pname];
-    return '<tr><td style="font-weight:600;font-size:14px">'+esc(pname)+'</td><td class="num" style="font-weight:800;color:var(--red-text)">'+fmtNum(it.qty)+' '+esc(it.uom)+'</td></tr>';
-  }).join('');
+  if(pendingLoadsSelected && !data.byCustomer[pendingLoadsSelected]) pendingLoadsSelected=null;
 
   el.innerHTML=
-    '<h2 class="sec-title" style="margin-bottom:13px">&#9203; Pending Loads</h2>'+
-    '<div class="fg" style="margin-bottom:12px"><div class="srch-wrap"><span class="srch-ico">&#128269;</span>'+
-    '<input class="srch-inp" id="pl-loads-search" value="'+esc(pendingLoadsSearch)+'" placeholder="Search customer or product..." autocomplete="off"></div></div>'+
-    '<div id="pl-loads-cust-list">'+buildPendingCustCardsHtml(filteredNames,data)+'</div>'+
-    '<div class="card"><div class="card-title">&#128202; Total Pending by Item ('+fmtNum(grandTotal)+' units across '+custNames.length+' customers)</div>'+
-    '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Item</th><th style="text-align:right">Total Pending</th></tr></thead><tbody>'+itemTotalRows+'</tbody></table></div></div>';
+    '<h2 class="sec-title" style="margin-bottom:13px;display:flex;align-items:center">'+backBtn()+'&#9203; Pending Loads</h2>'+
+    '<div class="side-layout">'+
+      '<div class="side-nav" style="width:270px">'+
+        '<div class="fg" style="margin-bottom:8px"><div class="srch-wrap"><span class="srch-ico">&#128269;</span>'+
+        '<input class="srch-inp" id="pl-loads-search" value="'+esc(pendingLoadsSearch)+'" placeholder="Search customer or product..." autocomplete="off"></div></div>'+
+        '<button type="button" class="side-nav-item'+(!pendingLoadsSelected?' on':'')+'" id="pl-nav-totals" onclick="selectPendingLoadsTotals()"><span class="lbl-main"><span>&#128202;</span><span>Total by Item</span></span></button>'+
+        '<div id="pl-cust-nav" style="margin-top:6px;display:flex;flex-direction:column;gap:4px">'+buildPendingCustNavHtml(filteredPendingCustNames(data),data)+'</div>'+
+      '</div>'+
+      '<div class="side-content" id="pl-detail"></div>'+
+    '</div>';
+
+  paintPendingLoadsDetail();
 
   var s=document.getElementById('pl-loads-search');
   if(s){
     s.addEventListener('input',function(e){
       pendingLoadsSearch=e.target.value;
-      var w=document.getElementById('pl-loads-cust-list');
-      if(w){
-        var qq=pendingLoadsSearch.trim().toLowerCase();
-        var fn=custNames.filter(function(cn){
-          if(!qq) return true;
-          if(cn.toLowerCase().indexOf(qq)>=0) return true;
-          var custData=data.byCustomer[cn];
-          if(custData && custData.items){
-            return Object.keys(custData.items).some(function(pname){
-              return pname.toLowerCase().indexOf(qq)>=0;
-            });
-          }
-          return false;
-        });
-        w.innerHTML=buildPendingCustCardsHtml(fn,data);
-      }
+      paintPendingLoadsNav();
+      paintPendingLoadsDetail();
     });
   }
 }
@@ -4008,6 +4126,7 @@ function renderStab(){
         '<button class="btn btn-gh" onclick="loadStaffList()">&#128260; Refresh list</button>'+
       '</div>'+
       '<div class="card"><div class="card-title">&#128274; Change my password</div>'+
+        '<div class="fg"><label class="lbl">Current password</label><input class="inp" type="password" id="pw_old" autocomplete="current-password"></div>'+
         '<div class="grid2">'+
           '<div class="fg"><label class="lbl">New password</label><input class="inp" type="password" id="pw_new" autocomplete="new-password"></div>'+
           '<div class="fg"><label class="lbl">Repeat new password</label><input class="inp" type="password" id="pw_new2" autocomplete="new-password"></div>'+
@@ -4017,6 +4136,7 @@ function renderStab(){
       (userRole==='admin'?
       '<div class="card"><div class="card-title">&#128176; Price-edit password</div>'+
         '<p style="font-size:14px;color:var(--text-muted);margin-bottom:12px">Asked when someone edits a price inside an estimate. Employees can only type it - they can never see it.</p>'+
+        '<div class="fg"><label class="lbl">Current price-edit password</label><input class="inp" type="text" id="pp_old" placeholder="type the current password" autocomplete="off"></div>'+
         '<div class="grid2"><div class="fg"><label class="lbl">New price-edit password</label><input class="inp" type="text" id="pp_new" placeholder="type a new password" autocomplete="off"></div></div>'+
         '<button class="btn btn-r" onclick="changePricePassword()">&#128190; Save password</button>'+
       '</div>':'');
@@ -4056,19 +4176,31 @@ window.setStaffActiveUi=function(id,active){
     function(err){ toast(GLTCloud.errorText(err),'err'); loadStaffList(); });
 };
 window.changeMyPassword=function(){
+  var old=(document.getElementById('pw_old')||{}).value||'';
   var a=(document.getElementById('pw_new')||{}).value||'', b=(document.getElementById('pw_new2')||{}).value||'';
+  if(!old){ toast('Enter your current password first','err'); return; }
   if(a.length<6){ toast('Use at least 6 characters','err'); return; }
-  if(a!==b){ toast('The two passwords do not match','err'); return; }
-  GLTCloud.changePassword(a).then(function(){
-    toast('Password changed'); document.getElementById('pw_new').value=''; document.getElementById('pw_new2').value='';
+  if(a!==b){ toast('The two new passwords do not match','err'); return; }
+  toast('Checking your current password...','info');
+  GLTCloud.verifyMyPassword(old).then(function(){
+    return GLTCloud.changePassword(a);
+  }).then(function(){
+    toast('Password changed');
+    document.getElementById('pw_old').value=''; document.getElementById('pw_new').value=''; document.getElementById('pw_new2').value='';
   }, function(err){ toast(GLTCloud.errorText(err),'err'); });
 };
 window.changePricePassword=function(){
+  var old=((document.getElementById('pp_old')||{}).value||'').trim();
   var p=((document.getElementById('pp_new')||{}).value||'').trim();
+  if(!old){ toast('Enter the current price-edit password first','err'); return; }
   if(p.length<4){ toast('Use at least 4 characters','err'); return; }
-  GLTCloud.setPricePassword(p).then(function(){
-    appSettings=Object.assign({},appSettings,{price_edit_password:p}); lsSet('appSettings',appSettings);
-    toast('Price-edit password saved'); document.getElementById('pp_new').value='';
+  toast('Checking the current password...','info');
+  GLTCloud.verifyPricePassword(old).then(function(ok){
+    if(!ok){ toast('Current price-edit password is incorrect','err'); return; }
+    return GLTCloud.setPricePassword(p).then(function(){
+      appSettings=Object.assign({},appSettings,{price_edit_password:p}); lsSet('appSettings',appSettings);
+      toast('Price-edit password saved'); document.getElementById('pp_old').value=''; document.getElementById('pp_new').value='';
+    });
   }, function(err){ toast(GLTCloud.errorText(err),'err'); });
 };
 

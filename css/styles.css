@@ -196,7 +196,7 @@ code { font-family: ui-monospace, 'SF Mono', Consolas, monospace; }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-.wrap { max-width: 1320px; margin: 0 auto; padding-top: 32px; }
+.wrap { max-width: 1320px; margin: 0 auto; padding-top: 32px; height: 100%; }
 
 /* 3. TOP NAVIGATION ------------------------------------------------------ */
 #nav {
@@ -362,12 +362,15 @@ code { font-family: ui-monospace, 'SF Mono', Consolas, monospace; }
 }
 
 /* 4. HOME TILES ---------------------------------------------------------- */
+/* Home fits one screen: hero + tile grid scale with viewport height instead of a fixed size */
+#pg-home.active { display: flex; flex-direction: column; min-height: 100%; }
 .home-hero {
   position: relative;
   overflow: hidden;
+  flex: 0 0 auto;
   border-radius: var(--radius-lg);
-  padding: 34px 36px;
-  margin-bottom: 28px;
+  padding: clamp(12px, 2.4vh, 34px) clamp(18px, 3vw, 36px);
+  margin-bottom: clamp(10px, 1.6vh, 28px);
   border: 1px solid rgba(233, 185, 92, 0.22);
   background:
     radial-gradient(520px 220px at 100% 0%, rgba(233, 185, 92, 0.20), transparent 70%),
@@ -398,18 +401,21 @@ code { font-family: ui-monospace, 'SF Mono', Consolas, monospace; }
 }
 .home-hero-title {
   font-family: var(--font-display);
-  font-size: 38px;
+  font-size: clamp(24px, 4.6vh, 40px);
   font-weight: 700;
   line-height: 1.15;
   letter-spacing: 0.2px;
   color: var(--text-main);
 }
-.home-hero-sub { margin-top: 10px; font-size: 16px; color: var(--text-muted); }
+.home-hero-sub { margin-top: clamp(4px, 0.8vh, 10px); font-size: clamp(14px, 2vh, 17px); color: var(--text-muted); }
 
 .home-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 20px;
+  grid-template-rows: repeat(2, 1fr);
+  gap: clamp(8px, 1.6vh, 20px);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .home-tile {
@@ -417,14 +423,15 @@ code { font-family: ui-monospace, 'SF Mono', Consolas, monospace; }
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.01)), var(--card-bg);
   border: 1px solid var(--card-border);
   border-radius: var(--radius-lg);
-  padding: 34px 16px 30px;
+  padding: clamp(10px, 2.2vh, 34px) clamp(10px, 1.4vw, 16px);
   text-align: center;
   box-shadow: var(--shadow-sm);
   transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.25s, box-shadow 0.25s;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 18px;
+  justify-content: center;
+  gap: clamp(6px, 1.2vh, 18px);
   cursor: pointer;
   overflow: hidden;
 }
@@ -446,11 +453,11 @@ code { font-family: ui-monospace, 'SF Mono', Consolas, monospace; }
 .home-tile:active { transform: scale(0.97); }
 
 .home-tile .home-tile-icon {
-  width: 68px; height: 68px;
+  width: clamp(38px, 7vh, 68px); height: clamp(38px, 7vh, 68px);
   display: grid; place-items: center;
-  font-size: 32px;
+  font-size: clamp(19px, 3.8vh, 34px);
   line-height: 1;
-  border-radius: 20px;
+  border-radius: clamp(10px, 2vh, 20px);
   background: linear-gradient(145deg, rgba(233, 185, 92, 0.18), rgba(229, 56, 59, 0.10));
   border: 1px solid rgba(233, 185, 92, 0.25);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
@@ -459,7 +466,7 @@ code { font-family: ui-monospace, 'SF Mono', Consolas, monospace; }
 .home-tile:hover .home-tile-icon { transform: scale(1.08) rotate(-3deg); }
 
 .home-tile .home-tile-label {
-  font-size: 17px;
+  font-size: clamp(15px, 2.3vh, 20px);
   font-weight: 700;
   color: var(--text-main);
   letter-spacing: -0.1px;
@@ -758,6 +765,24 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--gold); width: 
   animation: drawerIn 0.25s ease-out;
 }
 @keyframes drawerIn { from { transform: translateX(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+/* left-sliding variant, used by the site menu (nav "Home" button) */
+.drawer-ov.left { justify-content: flex-start; }
+.drawer-ov.left .drawer {
+  border-left: none; border-right: 1px solid var(--card-border-strong);
+  box-shadow: 18px 0 40px rgba(0, 0, 0, 0.5);
+  animation: drawerInLeft 0.25s ease-out;
+  width: min(340px, 84vw);
+}
+@keyframes drawerInLeft { from { transform: translateX(-40px); opacity: 0; } to { transform: none; opacity: 1; } }
+.nav-menu-item {
+  display: flex; align-items: center; gap: 14px;
+  padding: 13px 12px; border-radius: 12px; margin-bottom: 4px;
+  cursor: pointer; font-size: 16px; font-weight: 600; color: var(--text-main);
+  border: 1px solid transparent; background: transparent;
+}
+.nav-menu-item:hover { background: var(--btn-sec-hover); }
+.nav-menu-item.on { background: rgba(233, 185, 92, 0.14); border-color: rgba(233, 185, 92, 0.4); color: var(--gold-soft); }
+.nav-menu-item .ico { font-size: 21px; width: 28px; text-align: center; flex-shrink: 0; }
 .drawer h3 { font-size: 17px; margin: 18px 0 8px; }
 .drawer-hdr { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .drawer .rule-row, .drawer .ex-row {
@@ -813,6 +838,13 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--gold); width: 
   transition: width 0.25s ease, opacity 0.2s ease, padding 0.25s ease;
 }
 .bi-sbox.open .inp { width: min(320px, 55vw); padding: 10px 14px; border-width: 1.5px; opacity: 1; }
+/* same expanding search box, reused wherever a list needs a search toggle next to its title */
+.mini-search { display: flex; align-items: center; gap: 8px; flex-direction: row-reverse; }
+.mini-search .inp {
+  width: 0; padding-left: 0; padding-right: 0; border-width: 0; opacity: 0; min-width: 0; font-weight: 500;
+  transition: width 0.25s ease, opacity 0.2s ease, padding 0.25s ease;
+}
+.mini-search.open .inp { width: min(260px, 50vw); padding: 9px 12px; border-width: 1.5px; opacity: 1; }
 .icon-btn {
   width: 42px; height: 42px; flex-shrink: 0;
   border-radius: 12px; border: 1px solid var(--card-border-strong);
@@ -820,6 +852,70 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--gold); width: 
   font-size: 18px; cursor: pointer;
 }
 .icon-btn:hover { border-color: var(--brand); }
+
+/* top-left "back to Home" button shown on every page except Home itself */
+.back-btn {
+  width: 40px; height: 40px; flex-shrink: 0;
+  border-radius: 12px; border: 1px solid var(--card-border-strong);
+  background: var(--btn-sec-bg); color: var(--text-main);
+  font-size: 19px; line-height: 1; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-right: 12px; vertical-align: middle;
+}
+.back-btn:hover { border-color: var(--brand); background: var(--btn-sec-hover); }
+.card-title.with-search { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+/* master-detail layout: a left list of options/records, page content on the right
+   (Settings, Dashboard, Customers, Pending Loads). On a wide screen the page's own
+   title and the left list never move at all - only .side-content scrolls, in its own
+   scrollbar - because the page itself stops scrolling and hands scrolling down to
+   .side-content instead. */
+#pg-settings.active, #pg-dashboard.active, #pg-customers.active, #pg-pendingloads.active {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+#pg-settings.active > *:first-child, #pg-dashboard.active > *:first-child,
+#pg-customers.active > *:first-child, #pg-pendingloads.active > *:first-child {
+  flex: 0 0 auto;
+}
+#pg-settings.active > .side-layout, #pg-dashboard.active > .side-layout,
+#pg-customers.active > .side-layout, #pg-pendingloads.active > .side-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.side-layout { display: flex; gap: 20px; align-items: stretch; min-height: 0; }
+.side-nav {
+  width: 230px; flex-shrink: 0;
+  display: flex; flex-direction: column; gap: 4px;
+  overflow-y: auto;      /* if the list itself is long, it scrolls in place instead of pushing anything */
+  padding-right: 2px;
+}
+.side-nav-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 12px 14px; border-radius: 12px; border: 1px solid transparent;
+  background: transparent; color: var(--text-main); font-size: 15px; font-weight: 600;
+  cursor: pointer; text-align: left; width: 100%; flex-shrink: 0;
+}
+.side-nav-item .lbl-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.side-nav-item .lbl-main span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-nav-item:hover { background: var(--btn-sec-hover); }
+.side-nav-item.on { background: rgba(233, 185, 92, 0.14); border-color: rgba(233, 185, 92, 0.4); color: var(--gold-soft); }
+.side-content { flex: 1; min-width: 0; overflow-y: auto; padding-right: 4px; padding-bottom: 24px; }
+@media (max-width: 760px) {
+  /* a phone scrolls the whole page normally - a fixed-height column layout is awkward on a small screen */
+  #pg-settings.active, #pg-dashboard.active, #pg-customers.active, #pg-pendingloads.active {
+    display: block; height: auto;
+  }
+  .side-layout { flex-direction: column; align-items: stretch; }
+  .side-nav {
+    width: 100%; flex-direction: row; overflow-x: auto; overflow-y: visible; gap: 8px;
+    position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 6px 0; margin: 0 0 10px;
+  }
+  .side-nav-item { flex-shrink: 0; width: auto; }
+  .side-content { overflow-y: visible; padding-right: 0; padding-bottom: 0; }
+}
 
 /* short product code shown before the product name */
 .code-badge {
@@ -1270,14 +1366,19 @@ td.stk-ok, td.stk-low, td.stk-out {
 
 /* 13. RESPONSIVE --------------------------------------------------------- */
 @media (max-width: 1100px) {
-  .home-grid { grid-template-columns: repeat(3, 1fr); }
+  .home-grid { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); }
 }
 
 @media (max-width: 900px) {
   #pages { padding: 0 20px 48px; }
   .wrap { padding-top: 24px; }
   .nav-top { padding: 12px 20px; }
-  .home-grid { grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  /* a phone screen scrolls normally instead of squeezing every tile to fit */
+  #pg-home.active { display: block; }
+  .home-grid { grid-template-columns: repeat(2, 1fr); grid-template-rows: none; gap: 16px; flex: none; }
+  .home-tile { padding: 22px 14px 20px; gap: 14px; }
+  .home-tile .home-tile-icon { width: 56px; height: 56px; font-size: 26px; border-radius: 16px; }
+  .home-tile .home-tile-label { font-size: 15.5px; }
   /* dashboard two-column rows carry an inline grid-template — force a single column */
   .grid2 { grid-template-columns: minmax(0, 1fr) !important; }
   .grid2 > * { min-width: 0; }
@@ -1301,9 +1402,6 @@ td.stk-ok, td.stk-low, td.stk-out {
 
   .home-hero { padding: 26px 22px; margin-bottom: 20px; }
   .home-hero-title { font-size: 29px; }
-  .home-tile { padding: 26px 12px 22px; gap: 14px; }
-  .home-tile .home-tile-icon { width: 58px; height: 58px; font-size: 28px; border-radius: 17px; }
-  .home-tile .home-tile-label { font-size: 15.5px; }
 
   .card { padding: 20px 18px; margin-bottom: 18px; border-radius: 18px; }
   .sec-title { font-size: 26px; }
