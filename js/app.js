@@ -3041,7 +3041,8 @@ window.calcEditStock=function(){
 window.saveEdit=function(id){
   var idx=products.findIndex(function(p){return p._id===id;});if(idx<0)return;
   var prices={};REF_LIST.forEach(function(r){var v=(document.getElementById('pr_'+r.id)||{}).value;prices[r.id]=v?Number(v):null;});
-  var qpc=parseFloat((document.getElementById('ep_qpc')||{}).value)||null;
+  var qpcRaw=(document.getElementById('ep_qpc')||{}).value;
+  var qpc=String(qpcRaw).trim()===''?null:(parseFloat(qpcRaw)||0);   // only a truly blank field clears it — 0 or a parse hiccup no longer does
   var cases=parseFloat((document.getElementById('ep_cases')||{}).value)||0;
   var loose=parseFloat((document.getElementById('ep_loose')||{}).value)||0;
   var totalStk=qpc?((cases*qpc)+loose):(parseFloat((document.getElementById('ep_stk')||{}).value)||0);
@@ -3244,6 +3245,7 @@ function delBill(id){
 function renderSettings(){
   var el=document.getElementById('pg-settings');
   var items=[['general','&#127760;','General'],['stock','&#128230;','Stock'],['data','&#9729;&#65039;','Data & Sync'],['users','&#128101;','Users']];
+  if(userRole==='admin') items.push(['audit','&#128220;','Change Log']);
   var navHtml=items.map(function(x){
     return '<button type="button" class="side-nav-item'+(settingsTab===x[0]?' on':'')+'" onclick="setStab(\''+x[0]+'\')">'+
       '<span class="lbl-main"><span>'+x[1]+'</span><span>'+x[2]+'</span></span></button>';
@@ -4045,7 +4047,7 @@ function renderPendingLoads(){
   el.innerHTML=
     '<h2 class="sec-title" style="margin-bottom:13px;display:flex;align-items:center">'+backBtn()+'&#9203; Pending Loads</h2>'+
     '<div class="side-layout">'+
-      '<div class="side-nav" style="width:270px">'+
+      '<div class="side-nav pl-side-nav">'+
         '<div class="fg" style="margin-bottom:8px"><div class="srch-wrap"><span class="srch-ico">&#128269;</span>'+
         '<input class="srch-inp" id="pl-loads-search" value="'+esc(pendingLoadsSearch)+'" placeholder="Search customer or product..." autocomplete="off"></div></div>'+
         '<button type="button" class="side-nav-item'+(!pendingLoadsSelected?' on':'')+'" id="pl-nav-totals" onclick="selectPendingLoadsTotals()"><span class="lbl-main"><span>&#128202;</span><span>Total by Item</span></span></button>'+
@@ -4141,8 +4143,72 @@ function renderStab(){
         '<button class="btn btn-r" onclick="changePricePassword()">&#128190; Save password</button>'+
       '</div>':'');
     loadStaffList();
+  }else if(settingsTab==='audit'){
+    el.innerHTML=
+      '<div class="card">'+
+        '<div class="card-title">&#128220; Product Change Log</div>'+
+        '<p style="font-size:14px;color:var(--text-muted);margin-bottom:12px">Every change to a product - name, code, category, unit, qty/case, stock, prices - is recorded automatically: who made it, exactly when, and which part of the app did it. Added and deleted products are recorded too.</p>'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">'+
+          '<input class="inp" id="al-search" placeholder="Search by product name or username..." style="flex:1;min-width:220px" oninput="debounceAuditSearch()">'+
+          '<button class="btn btn-gh btn-sm" onclick="loadAuditLog()">&#128260; Refresh</button>'+
+        '</div>'+
+        '<div id="audit-log-list"><div class="empty-txt" style="padding:12px;color:var(--text-muted)">Loading...</div></div>'+
+      '</div>';
+    loadAuditLog();
   }
 }
+
+// ---- Product Change Log (Settings -> Change Log, admin only) ----
+var AUDIT_FIELD_LABEL={name:'Name',code:'Code',category:'Category',uom:'UOM',qty_per_case:'Qty/Case',
+  stock_cases:'Stock Cases',stock_loose:'Loose Pcs',prices:'Prices'};
+function fmtAuditVal(field,v){
+  if(v===null||v===undefined) return '<em style="color:var(--danger)">blank</em>';
+  if(field==='prices'&&typeof v==='object') return esc(JSON.stringify(v));
+  return esc(String(v));
+}
+function fmtAuditTime(iso){
+  var d=new Date(iso);
+  if(isNaN(d.getTime())) return esc(String(iso||''));
+  return pad(d.getDate())+'-'+pad(d.getMonth()+1)+'-'+d.getFullYear()+' '+
+    d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
+}
+function buildAuditRowsHtml(rows){
+  if(!rows||!rows.length) return '<div class="empty" style="padding:20px"><div class="empty-txt">No changes recorded yet.</div></div>';
+  var actionTag={insert:'<span class="tag" style="background:#16a34a22;color:#16a34a">added</span>',
+    update:'<span class="tag" style="background:#f59e0b22;color:#f59e0b">changed</span>',
+    delete:'<span class="tag" style="background:#dc262622;color:#dc2626">deleted</span>'};
+  return rows.map(function(r){
+    var fieldsHtml=Object.keys(r.changes||{}).map(function(k){
+      var c=r.changes[k], lbl=AUDIT_FIELD_LABEL[k]||k;
+      return '<div style="font-size:13.5px;margin-top:3px"><b>'+esc(lbl)+':</b> '+
+        fmtAuditVal(k,c.old)+' &rarr; '+fmtAuditVal(k,c.new)+'</div>';
+    }).join('');
+    return '<div style="border-bottom:1px dashed var(--card-border);padding:10px 2px">'+
+      '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">'+
+        '<div style="font-weight:700;font-size:14.5px">'+esc(r.productName||r.productId||'—')+' '+(actionTag[r.action]||'')+'</div>'+
+        '<div style="font-size:12.5px;color:var(--text-muted)">'+fmtAuditTime(r.changedAt)+'</div>'+
+      '</div>'+
+      '<div style="font-size:13px;color:var(--text-muted);margin-top:2px">by <b>'+esc(r.changedBy||'unknown')+'</b>'+
+        (r.source?' &middot; '+esc(r.source):'')+'</div>'+
+      fieldsHtml+
+    '</div>';
+  }).join('');
+}
+window.loadAuditLog=function(){
+  var box=document.getElementById('audit-log-list'); if(!box) return;
+  if(!cloudOn()){ box.innerHTML='<div class="alert alert-warn">Log in first.</div>'; return; }
+  var q=((document.getElementById('al-search')||{}).value||'').trim();
+  box.innerHTML='<div class="empty-txt" style="padding:12px;color:var(--text-muted)">Loading...</div>';
+  GLTCloud.getProductAuditLog({search:q,limit:300}).then(function(rows){
+    box.innerHTML=buildAuditRowsHtml(rows||[]);
+  },function(err){
+    box.innerHTML='<div class="alert alert-err">&#10060; '+esc(GLTCloud.errorText(err))+'</div>';
+  });
+};
+window.debounceAuditSearch=function(){
+  clearTimeout(window._auditSearchTimer);
+  window._auditSearchTimer=setTimeout(loadAuditLog,400);
+};
 
 // ---- staff management (Settings -> Users) ----
 window.loadStaffList=function(){
@@ -5424,12 +5490,15 @@ setInterval(function() {
 // another device (e.g. a bill saved on mobile) show up here without
 // needing to manually switch tabs. Skipped while on the Billing tab
 // (which already tracks live reservations above, and a full re-render
-// there would wipe out an in-progress, unsaved bill) and skipped while
-// the user is actively typing anywhere, so it never yanks focus away
-// mid-input.
+// there would wipe out an in-progress, unsaved bill), skipped while the
+// user is actively typing anywhere (so it never yanks focus away
+// mid-input), and skipped on the Change Log (a full re-render there
+// wipes the search box and scroll position every time - it already
+// loads fresh whenever you open it or press Refresh).
 setInterval(function() {
   if (!cloudOn()) return;
   if (curTab === 'billing') return;
+  if (curTab === 'settings' && settingsTab === 'audit') return;
   var activeTag = document.activeElement ? document.activeElement.tagName : '';
   if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') return;
   gdPullFromScriptSilently(function() {

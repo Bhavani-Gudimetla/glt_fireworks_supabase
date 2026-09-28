@@ -903,6 +903,7 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--gold); width: 
 .side-nav-item:hover { background: var(--btn-sec-hover); }
 .side-nav-item.on { background: rgba(233, 185, 92, 0.14); border-color: rgba(233, 185, 92, 0.4); color: var(--gold-soft); }
 .side-content { flex: 1; min-width: 0; overflow-y: auto; padding-right: 4px; padding-bottom: 24px; }
+.pl-side-nav { width: 270px; }   /* Pending Loads: a search box + badges need a touch more room than the plain tab lists */
 @media (max-width: 760px) {
   /* a phone scrolls the whole page normally - a fixed-height column layout is awkward on a small screen */
   #pg-settings.active, #pg-dashboard.active, #pg-customers.active, #pg-pendingloads.active {
@@ -915,6 +916,14 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--gold); width: 
   }
   .side-nav-item { flex-shrink: 0; width: auto; }
   .side-content { overflow-y: visible; padding-right: 0; padding-bottom: 0; }
+
+  /* Pending Loads' nav is a search box + a potentially long, changing list of customers -
+     that doesn't fit the short horizontal tab-row above, so it stays a normal stacked column. */
+  .pl-side-nav {
+    width: 100%; flex-direction: column; overflow-x: visible;
+    position: static; background: none; padding: 0; margin: 0 0 14px;
+  }
+  .pl-side-nav .side-nav-item { width: 100%; flex-shrink: 1; }
 }
 
 /* short product code shown before the product name */

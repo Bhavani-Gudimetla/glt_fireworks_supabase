@@ -598,6 +598,17 @@ var GLTCloud = (function () {
   function setStaffRole(id, role) { return rpc('set_staff_role', { p_id: id, p_role: role }); }
   function setStaffActive(id, active) { return rpc('set_staff_active', { p_id: id, p_active: !!active }); }
 
+  // ---- product change history (admin) ---------------------------------------
+  function getProductAuditLog(opts) {
+    opts = opts || {};
+    return rpc('get_product_audit_log', {
+      p_product_id: opts.productId != null ? String(opts.productId) : null,
+      p_search: opts.search || null,
+      p_since: opts.since || null,
+      p_limit: opts.limit || 300
+    });
+  }
+
   function test() {
     if (!init()) return Promise.reject(new Error(configHelp()));
     return rpc('my_profile').then(function (p) {
@@ -619,6 +630,7 @@ var GLTCloud = (function () {
     getData: getData, call: call, getReservations: getReservations, getBillLocks: getBillLocks,
     releaseOnUnload: releaseOnUnload, verifyPricePassword: verifyPricePassword, setPricePassword: setPricePassword,
     listStaff: listStaff, setStaffRole: setStaffRole, setStaffActive: setStaffActive,
+    getProductAuditLog: getProductAuditLog,
     saveProductImage: saveProductImage, removeProductImage: removeProductImage,
     outboxCount: outboxCount, pendingBillIds: pendingBillIds, flush: flush, paintBadge: paintBadge, test: test,
     isNetworkError: isNetErr, errorText: errText,
