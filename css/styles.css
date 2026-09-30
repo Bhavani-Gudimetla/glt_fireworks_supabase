@@ -959,6 +959,28 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--gold); width: 
 /* 8. TABLES -------------------------------------------------------------- */
 .tbl { width: 100%; border-collapse: collapse; font-size: 15px; font-variant-numeric: tabular-nums; }
 
+/* Price Lookup: fixed column widths (set via <colgroup> in JS) so every numeric column stays
+   the same width regardless of product name length - only the Item column flexes. */
+.pricelookup-tbl { table-layout: fixed; }
+.pricelookup-tbl th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pricelookup-tbl td.num { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Delivery timeline (Estimate preview -> Delivery History) - a vertical stepper,
+   newest event at the top, "Estimate Created" always at the bottom. */
+.dl-timeline { display: flex; flex-direction: column; }
+.dl-tl-item { position: relative; padding-left: 30px; padding-bottom: 22px; }
+.dl-tl-item:not(.last)::before {
+  content: ''; position: absolute; left: 7px; top: 18px; bottom: -6px; width: 2px; background: var(--card-border);
+}
+.dl-tl-dot {
+  position: absolute; left: 0; top: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--card-bg); border: 2.5px solid var(--text-muted);
+}
+.dl-tl-item.active .dl-tl-dot { border-color: var(--brand); background: var(--brand); box-shadow: 0 0 0 4px rgba(229, 56, 59, 0.18); }
+.dl-tl-title { font-weight: 700; font-size: 15px; color: var(--text-main); }
+.dl-tl-time { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.dl-tl-detail { font-size: 13.5px; color: var(--text-main); margin-top: 6px; line-height: 1.55; }
+
 .tbl th {
   background: var(--table-header-bg);
   padding: 15px 16px;

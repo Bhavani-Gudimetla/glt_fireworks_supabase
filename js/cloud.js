@@ -462,6 +462,27 @@ var GLTCloud = (function () {
       case 'releaseBillLock':
         return rpc('release_bill_lock', { p_bill: String(d.billId), p_session: d.sessionId || '' })
           .then(function () { return { status: 'success' }; });
+      case 'startBillLoading':
+        return rpc('start_bill_loading', { p_bill_id: String(d.billId) });
+      case 'endBillLoading':
+        return rpc('end_bill_loading', { p_bill_id: String(d.billId) })
+          .then(function (r) { return { status: 'success', challan: r && r.challan, bill: r && r.bill }; });
+      case 'getBillChallans':
+        return rpc('get_bill_challans', { p_bill_id: String(d.billId) }).then(function (r) { return { status: 'success', challans: r || [] }; });
+      case 'saveDeliveryChallanPdf': {
+        var chId = String(d.challanId), chBillId = String(d.billId);
+        var d1 = new Date(), dc1 = ('0' + d1.getDate()).slice(-2) + ('0' + (d1.getMonth() + 1)).slice(-2) + String(d1.getFullYear()).slice(-2);
+        var chFile = safeName(d.customerName || 'customer') + '_load' + (d.seq || '') + '_' + dc1 + '.pdf';
+        return makePdf(d.htmlContent).then(function (blob) {
+          return uploadPdf('bills/' + safeName(chBillId) + '/challans/' + chFile, blob);
+        }).then(function (url) {
+          return rpc('set_challan_pdf', { p_challan_id: chId, p_url: url }).then(function () {
+            return { status: 'success', fileUrl: url };
+          });
+        }).catch(function (err) {
+          return { status: 'success', warning: 'Delivery challan saved, but the PDF link could not be created (' + errText(err) + ').' };
+        });
+      }
       case 'addUser':
       case 'deleteUser':
         return Promise.resolve({ status: 'error', message: 'Staff logins are now managed in Settings -> Users and the Supabase dashboard.' });

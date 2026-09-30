@@ -1179,6 +1179,12 @@ function buildBillItemsTableOnly(){
     return !q || billItems[i].productName.toLowerCase().indexOf(q)>=0;
   });
 
+  // A saved estimate's Loaded column is only editable during an active loading
+  // session (started from the estimate's Preview) — this screen is for editing
+  // the order itself, not for logging deliveries.
+  var editingBill  = window._editingOriginalId ? bills.find(function(b){return b._id===window._editingOriginalId;}) : null;
+  var loadedLocked = !!editingBill && !editingBill.loadingActive;
+
   // Common cell style with vertical border
   var tdBorder = 'border-right:1px solid var(--card-border);';
   var inp      = 'padding:8px 4px;border-radius:8px;font-size:14px;font-weight:700;color:var(--text-main);background:var(--input-bg);text-align:center;';
@@ -1227,7 +1233,9 @@ function buildBillItemsTableOnly(){
       '<td style="'+tdBorder+'padding:10px 8px;text-align:right;min-width:100px">'+priceCell+'</td>'+
       '<td style="'+tdBorder+'padding:10px 8px;text-align:right;min-width:110px">'+amtCell+'</td>'+
       '<td style="'+tdBorder+'padding:6px 4px;text-align:center">'+
-        '<input type="number" data-f="loaded" min="0" value="'+loaded+'" style="width:70px;'+inp+'color:'+pendInfo.color+';border:1.5px solid '+pendInfo.color+';" oninput="updateLoaded('+i+',this.value)" onchange="updateLoaded('+i+',this.value)" title="Qty Loaded">'+
+        (loadedLocked
+          ? '<span style="display:inline-block;width:70px;'+inp+'color:var(--text-muted);border:1.5px dashed var(--card-border);cursor:not-allowed" title="Locked — press Start Loading above to log a delivery">&#128274; '+loaded+'</span>'
+          : '<input type="number" data-f="loaded" min="0" value="'+loaded+'" style="width:70px;'+inp+'color:'+pendInfo.color+';border:1.5px solid '+pendInfo.color+';" oninput="updateLoaded('+i+',this.value)" onchange="updateLoaded('+i+',this.value)" title="Qty Loaded">')+
       '</td>'+
       '<td id="bi-pend-'+i+'" style="'+tdBorder+'font-weight:700;font-size:15px;padding:10px 6px;text-align:center;color:'+pendInfo.color+'">'+pendInfo.text+'</td>'+
       '<td style="padding:6px 4px;text-align:center"><button class="btn btn-del btn-sm" onclick="removeBillItem('+i+')">&#10005;</button></td>'+
@@ -1362,18 +1370,26 @@ function paintBillSearchState(){
   if(w) w.classList.toggle('disabled',!ok);
 }
 
+// The bill (from the `bills` array) that this Edit session is attached to, if any -
+// this is where loadingActive / orderStatus / delivery info actually lives.
+function currentEditingBill(){
+  return window._editingOriginalId ? bills.find(function(b){return b._id===window._editingOriginalId;}) : null;
+}
+
 function renderBilling(){
   var el=document.getElementById('pg-billing');
   var billNum=getBillNum();
-  var itemsHtml=buildBillItemsHtml();
+  var editingBill=currentEditingBill();
+  var loadingActive=!!(editingBill&&editingBill.loadingActive);
+  var itemsHtml=loadingActive?buildLoadingModeHtml():buildBillItemsHtml();
   var editModeBar='';
   if(window._editingOriginalId){
-    editModeBar='<div class="alert alert-warn" style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between">'+
+    editModeBar='<div class="alert alert-warn" style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">'+
       '<span>&#9999;&#65039; <strong>Editing Estimate '+(window._editingOriginalBill?'#'+window._editingOriginalBill.billNumber:'')+'</strong></span>'+
       '<button class="btn btn-b btn-sm" onclick="goTab(\'home\')">&#127968; Exit &amp; Save</button>'+
     '</div>';
   }
-  el.innerHTML=editModeBar+
+  el.innerHTML=editModeBar+buildLoadingBarHtml(editingBill)+
     '<div class="sec-hdr"><h2 class="sec-title" style="display:flex;align-items:center">'+backBtn()+'&#129534; '+t('billing')+'</h2><span class="tag tag-r">#'+billNum+'</span></div>'+
     '<div class="card bill-top" id="bill-top">'+buildBillTopHtml()+'</div>'+
     '<div class="bill-search-sticky" id="bill-search-wrap">'+
@@ -1384,12 +1400,93 @@ function renderBilling(){
       '</div>'+
     '</div>'+
     '<div id="b-sel-prod"></div>'+
-    '<div class="card">'+buildBillItemsHeader()+itemsHtml+
+    '<div class="card">'+(loadingActive?itemsHtml:(buildBillItemsHeader()+itemsHtml))+
       /* Save button removed — bill autosaves on tab switch */
     '</div>';
   wireBilling();
   paintBillSearchState();
 }
+
+// Status badge + Start/End Loading button, shown above the items table only while
+// editing a SAVED estimate — this is where the delivery/loading workflow now lives.
+function buildLoadingBarHtml(editingBill){
+  if(!editingBill)return'';
+  var closed=editingBill.orderStatus==='closed';
+  var loadingActive=!!editingBill.loadingActive;
+  var pending=billTotalPending(editingBill);
+  var statusBadge=closed
+    ?'<span class="tag" style="background:#16a34a22;color:#16a34a;font-weight:700;padding:8px 12px;border-radius:10px">&#9989; Order Closed</span>'
+    :(loadingActive
+      ?'<span class="tag" style="background:#f59e0b22;color:#f59e0b;font-weight:700;padding:8px 12px;border-radius:10px">&#128666; Loading in progress'+(editingBill.loadingStartedBy?' — started by '+esc(editingBill.loadingStartedBy):'')+'</span>'
+      :'<span class="tag" style="background:#dc262622;color:#dc2626;font-weight:700;padding:8px 12px;border-radius:10px">&#8987; '+fmtNum(pending)+' units pending</span>');
+  var btn=closed?''
+    :(loadingActive
+      ?'<button class="btn btn-r" onclick="endLoadingUi(\''+editingBill._id+'\')">&#128274; End Loading</button>'
+      :'<button class="btn btn-g" onclick="startLoadingUi(\''+editingBill._id+'\')">&#128666; Start Loading</button>');
+  return '<div class="card" style="padding:12px 16px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">'+statusBadge+btn+'</div>';
+}
+
+// Compact table shown ONLY while a loading session is active on the estimate being
+// edited — Order Qty / UOM / Qty-per-case are read-only (the order itself isn't being
+// changed mid-delivery), only Loaded is editable, and there's no Price/Amount/Cases
+// columns to scroll past.
+function buildLoadingModeHtml(){
+  var rows=billItems.map(function(item,i){
+    var loaded=item.qtyLoaded!=null?item.qtyLoaded:0;
+    var delivered=item.qtyDelivered||0;
+    var pending=Math.max(0,(Number(item.totalQty)||0)-delivered-loaded);
+    var pendColor=pending>0?'var(--red-text)':'var(--green-text)';
+    return '<tr data-idx="'+i+'" style="border-bottom:1px solid var(--card-border)">'+
+      '<td style="padding:10px 10px;font-weight:700;font-size:14px;text-align:left">'+esc(item.productName)+'</td>'+
+      '<td style="padding:10px 6px;text-align:center">'+fmtNum(item.totalQty)+'</td>'+
+      '<td style="padding:10px 6px;text-align:center">'+esc(item.uom||'')+'</td>'+
+      '<td style="padding:10px 6px;text-align:center">'+(item.qtyPerCase?fmtNum(item.qtyPerCase):'—')+'</td>'+
+      '<td style="padding:10px 6px;text-align:center;font-weight:700;color:var(--green-text)">'+fmtNum(delivered)+'</td>'+
+      '<td style="padding:6px 4px;text-align:center">'+
+        '<input type="number" min="0" value="'+loaded+'" style="width:76px;padding:7px 4px;border-radius:8px;font-size:14px;font-weight:700;text-align:center;background:var(--input-bg);border:1.5px solid var(--brand);color:var(--text-main)" oninput="updateLoadedInEditMode('+i+',this.value)" onchange="updateLoadedInEditMode('+i+',this.value)">'+
+      '</td>'+
+      '<td id="lm-pend-'+i+'" style="padding:10px 6px;text-align:center;font-weight:800;color:'+pendColor+'">'+fmtNum(pending)+'</td>'+
+    '</tr>';
+  }).join('');
+  return '<div class="bi-head"><div class="card-title" style="margin-bottom:0">&#128666; Logging Delivery <span class="tag tag-gy">'+billItems.length+' items</span></div></div>'+
+    '<div class="tbl-wrap" style="border-radius:0 0 12px 12px;overflow-x:auto">'+
+    '<table style="width:100%;border-collapse:collapse">'+
+    '<thead><tr>'+
+      '<th style="padding:12px 10px;text-align:left;font-size:12.5px;border-right:1px solid rgba(255,255,255,0.15)">Item</th>'+
+      '<th style="padding:12px 6px;font-size:12.5px;border-right:1px solid rgba(255,255,255,0.15)">Order Qty</th>'+
+      '<th style="padding:12px 6px;font-size:12.5px;border-right:1px solid rgba(255,255,255,0.15)">UOM</th>'+
+      '<th style="padding:12px 6px;font-size:12.5px;border-right:1px solid rgba(255,255,255,0.15)">Qty/Case</th>'+
+      '<th style="padding:12px 6px;font-size:12.5px;background:rgba(16,185,129,0.16);color:#34d399;border-right:1px solid rgba(0,0,0,0.1)">Delivered</th>'+
+      '<th style="padding:12px 6px;font-size:12.5px;background:rgba(245,158,11,0.16);color:#fbbf24;border-right:1px solid rgba(0,0,0,0.1)">Loaded &#128666;</th>'+
+      '<th style="padding:12px 6px;font-size:12.5px;background:rgba(220,38,38,0.14);color:#f87171">Pending</th>'+
+    '</tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
+
+// A minimal bill snapshot (current in-edit items + the saved bill's other fields) used
+// to flush Loaded values to the server — deliberately NOT the full saveBill() flow
+// (that also does stock adjustment and closes the edit session, which we don't want
+// on every keystroke or right before End Loading).
+function buildFlushBillForLoading(){
+  var orig=bills.find(function(b){return b._id===window._editingOriginalId;})||{};
+  return Object.assign({},orig,{
+    _id: window._editingOriginalId,
+    items: billItems,
+    totalAmount: billItems.reduce(function(s,i){return s+(i.totalAmount||0);},0),
+    totalCases: billItems.reduce(function(s,i){return s+(i.cases||0);},0)
+  });
+}
+
+window.updateLoadedInEditMode=function(i,val){
+  if(!billItems[i])return;
+  var item=billItems[i];
+  item.qtyLoaded=parseFloat(val)||0;
+  var pending=Math.max(0,(Number(item.totalQty)||0)-(Number(item.qtyDelivered)||0)-item.qtyLoaded);
+  var cell=document.getElementById('lm-pend-'+i);
+  if(cell){cell.textContent=fmtNum(pending);cell.style.color=pending>0?'var(--red-text)':'var(--green-text)';}
+  saveAll();
+  clearTimeout(window._lmAutosaveTimer);
+  window._lmAutosaveTimer=setTimeout(function(){ apiCall('saveBill',{bill:buildFlushBillForLoading()},function(){}); },800);
+};
 
 function updateBillReference(newRef) {
   billRef = newRef || '';
@@ -1758,8 +1855,12 @@ function removeBillItem(i){
 //   zero (exactly loaded)    -> green              e.g. 0
 // Display only: item.qtyPending (units still owed, never below 0) keeps its
 // meaning for the Pending Loads page, statements and the sheet.
+// "Remaining" = still owed before this round (Total - already Delivered from past rounds).
+// diff compares what's Loaded right now against that remaining amount, so it flags an
+// over-load against what's actually still pending, not against the original full order.
 function pendingDiffInfo(item){
-  var diff=Math.round(((Number(item.qtyLoaded)||0)-(Number(item.totalQty)||0))*1000)/1000;
+  var remaining=Math.max(0,(Number(item.totalQty)||0)-(Number(item.qtyDelivered)||0));
+  var diff=Math.round(((Number(item.qtyLoaded)||0)-remaining)*1000)/1000;
   return {
     text: diff>0?'+'+diff:String(diff),
     color: diff===0?'var(--green-text)':(diff>0?'var(--red-text)':'var(--blue-text)')
@@ -1792,7 +1893,8 @@ function updateLoaded(i,val){
   var loaded=parseFloat(val)||0;
   if(billItems[i]){
     billItems[i].qtyLoaded=loaded;
-    billItems[i].qtyPending=Math.max(0,billItems[i].totalQty-loaded);
+    var remaining=Math.max(0,(billItems[i].totalQty||0)-(billItems[i].qtyDelivered||0));
+    billItems[i].qtyPending=Math.max(0,remaining-loaded);
     refreshPendingDisplay(i);
   }
 }
@@ -2246,6 +2348,16 @@ function cancelEdit(){
 }
 
 // == BILL PREVIEW ==
+// Delivered = confirmed in past loading rounds. Loaded = staged in the CURRENT round
+// (only typeable while bill.loadingActive is true). Pending = Total - Delivered - Loaded, live.
+function billTotalPending(bill){
+  return (bill.items||[]).reduce(function(s,it){
+    return s+Math.max(0,(Number(it.totalQty)||0)-(Number(it.qtyDelivered)||0)-(Number(it.qtyLoaded)||0));
+  },0);
+}
+
+// Read-only in the View modal — Loaded is only ever editable on the Billing "Edit
+// Estimate" screen now, where the Start/End Loading buttons also live.
 function buildBillPreviewRows(bill, filterQ){
   var q=(filterQ||'').trim().toLowerCase();
   var items=bill.items||[];
@@ -2253,28 +2365,184 @@ function buildBillPreviewRows(bill, filterQ){
   var rows=visible.map(function(item){
     var i=items.indexOf(item);
     var loaded=item.qtyLoaded!=null?item.qtyLoaded:0;
-    // Same red/blue/green rule as the live billing table's Loaded/Pending columns
-    // (item.qtyPending is clamped at 0 and can't show an over-load, so recompute the diff here)
-    var diff=Math.round((loaded-(Number(item.totalQty)||0))*1000)/1000;
-    var diffColor=diff===0?'var(--green-text)':(diff>0?'var(--red-text)':'var(--blue-text)');
-    var diffText=diff>0?'+'+diff:String(diff);
+    var delivered=item.qtyDelivered||0;
+    var pending=Math.max(0,(Number(item.totalQty)||0)-delivered-loaded);
+    var pendColor=pending>0?'var(--red-text)':'var(--green-text)';
     var priceStyle=item.sellingPrice?'':' style="color:var(--red-text);font-weight:700"';
     var amtStyle=item.totalAmount?'':' style="color:var(--red-text);font-weight:700"';
     return '<tr><td>'+(i+1)+'</td><td style="font-weight:700;font-size:14px">'+esc(item.productName)+'</td>'+
       '<td>'+(item.cases||'—')+'</td><td><strong>'+item.totalQty+'</strong></td>'+
       '<td>'+esc(item.uom)+'</td><td'+priceStyle+'>&#8377;'+item.sellingPrice+'</td><td class="num"'+amtStyle+'>'+fmtMoney(item.totalAmount)+'</td>'+
-      '<td style="text-align:center;font-weight:700;color:'+diffColor+'">'+loaded+'</td>'+
-      '<td style="color:'+diffColor+';font-weight:800">'+diffText+'</td></tr>';
+      '<td style="text-align:center;font-weight:700;color:var(--green-text)">'+fmtNum(delivered)+'</td>'+
+      '<td style="text-align:center;font-weight:700;color:var(--text-muted)">'+fmtNum(loaded)+(loaded?' &#128274;':'')+'</td>'+
+      '<td style="text-align:center;font-weight:800;color:'+pendColor+'">'+fmtNum(pending)+'</td></tr>';
   }).join('');
   var countNote=q?'<div style="font-size:13.5px;color:var(--text-muted);margin-bottom:8px">Showing '+visible.length+' of '+items.length+' items</div>':'';
   var noMatch='<div class="empty" style="padding:16px"><div class="empty-txt">No items match "'+esc(filterQ)+'"</div></div>';
-  return countNote+(visible.length?'<div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Item</th><th>Cases</th><th>Qty</th><th>UOM</th><th>Price</th><th>Amount</th><th style="background:rgba(245,158,11,0.16);color:#fbbf24">Loaded &#128666;</th><th style="background:rgba(245,158,11,0.16);color:#fbbf24">Pending</th></tr></thead><tbody>'+
-    rows+'<tr class="tr-total"><td colspan="2">Cases: '+esc(String(bill.totalCases||0))+'</td><td colspan="5" style="font-weight:700;text-align:right">TOTAL</td><td class="num" style="color:var(--red-text);font-size:17px" colspan="2">'+fmtMoney(bill.totalAmount)+'</td></tr>'+
+  return countNote+(visible.length?'<div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Item</th><th>Cases</th><th>Qty</th><th>UOM</th><th>Price</th><th>Amount</th>'+
+    '<th style="background:rgba(16,185,129,0.16);color:#34d399">Delivered</th>'+
+    '<th style="background:rgba(245,158,11,0.16);color:#fbbf24">Loaded &#128666;</th>'+
+    '<th style="background:rgba(220,38,38,0.14);color:#f87171">Pending</th></tr></thead><tbody>'+
+    rows+'<tr class="tr-total"><td colspan="2">Cases: '+esc(String(bill.totalCases||0))+'</td><td colspan="5" style="font-weight:700;text-align:right">TOTAL</td><td class="num" style="color:var(--red-text);font-size:17px" colspan="3">'+fmtMoney(bill.totalAmount)+'</td></tr>'+
     '</tbody></table></div>':noMatch);
 }
 
+// Start/End Loading — called from the Billing "Edit Estimate" screen's loading bar
+// (buildLoadingBarHtml). If that estimate happens to also be open in the View modal,
+// its timeline gets refreshed too.
+window.startLoadingUi=function(billId){
+  apiStartBillLoading(billId,function(res){
+    if(!res||res.status==='error'){toast('Could not start loading: '+((res&&res.message)||'unknown error'),'err');return;}
+    if(res.status==='closed'){
+      // Stale local state (e.g. closed on another device) — refresh this bill's status instead of starting.
+      toast('This order is already fully delivered — nothing left to load.','info');
+      var cidx=bills.findIndex(function(b){return b._id===billId;});
+      if(cidx>=0){ bills[cidx]=Object.assign({},bills[cidx],{orderStatus:'closed',loadingActive:false}); saveAll(); }
+      if(window._editingOriginalId===billId) renderBilling();
+      if(window._bpBill&&window._bpBill._id===billId) showBillPreview(bills[cidx>=0?cidx:0]);
+      return;
+    }
+    if(res.status==='already_active') toast('Loading was already started by '+(res.startedBy||'someone')+' — opening it.','info');
+    var idx=bills.findIndex(function(b){return b._id===billId;});
+    if(idx>=0){
+      bills[idx]=Object.assign({},bills[idx],{
+        loadingActive:true,
+        loadingStartedBy:res.startedBy||bills[idx].loadingStartedBy,
+        loadingStartedAt:res.startedAt||new Date().toISOString()
+      });
+      saveAll();
+    }
+    if(window._editingOriginalId===billId) renderBilling();
+    if(window._bpBill&&window._bpBill._id===billId) showBillPreview(idx>=0?bills[idx]:window._bpBill);
+  });
+};
+
+window.endLoadingUi=function(billId){
+  var editingHere=window._editingOriginalId===billId;
+  var billSnapshot=editingHere?buildFlushBillForLoading():bills.find(function(b){return b._id===billId;});
+  if(!billSnapshot){toast('Estimate not found','err');return;}
+  var nothingLoaded=(billSnapshot.items||[]).every(function(it){return !(Number(it.qtyLoaded)||0);});
+  if(!confirm(nothingLoaded
+    ?'Nothing is marked as Loaded yet. End the loading session without creating a delivery challan?'
+    :'End loading and generate the delivery challan for whatever is currently marked as Loaded?'))return;
+  // Flush whatever was just typed before committing — the per-keystroke autosave is
+  // debounced, so without this the server could still see the previous round's numbers.
+  clearTimeout(window._lmAutosaveTimer);
+  clearTimeout(window._bpAutosaveTimer);
+  toast(nothingLoaded?'Ending loading session...':'Saving and generating delivery challan...','info');
+  apiCall('saveBill',{bill:billSnapshot},function(saveRes){
+    if(!saveRes||saveRes.status!=='success'){
+      toast('Could not save the loaded quantities: '+((saveRes&&saveRes.message)||'unknown error'),'err');
+      return;
+    }
+    apiEndBillLoading(billId,function(res){
+      if(!res||res.status!=='success'){toast('Could not end loading: '+((res&&res.message)||'unknown error'),'err');return;}
+      var idx=bills.findIndex(function(b){return b._id===billId;});
+      if(idx>=0){ bills[idx]=Object.assign({},bills[idx],res.bill); saveAll(); }
+      var freshBill=idx>=0?bills[idx]:res.bill;
+      var challan=res.challan;
+      if(editingHere){ billItems=freshBill.items; renderBilling(); }
+      if(!challan){
+        // Nothing was loaded this round — unlocked, but no blank challan was recorded.
+        toast('Loading session ended — nothing was loaded, so no delivery challan was created.','info');
+        if(window._bpBill&&window._bpBill._id===billId) showBillPreview(freshBill);
+        return;
+      }
+      var html=buildDeliveryChallanHTML(freshBill,challan);
+      apiSaveChallanPdf(challan.id,billId,freshBill.customerName,challan.seq,html,function(pres){
+        if(pres&&pres.fileUrl)challan.pdfUrl=pres.fileUrl;
+        if(window._bpBill&&window._bpBill._id===billId) showBillPreview(freshBill);
+      });
+      toast(challan.orderStatus==='closed'
+        ?'🎉 Delivery logged — order fully closed!'
+        :'&#9989; Delivery challan generated. '+fmtNum(challan.totalQtyPending)+' units still pending.','ok');
+    });
+  });
+};
+
+// Styled like a standard GLT Fireworks bill (see buildBillHTML) — company header,
+// customer/estimate meta, item table, authorised-signatory footer. No separate
+// "total loaded" / "pending" summary lines — the Pending column in the table already
+// carries that, same as an ordinary bill.
+function buildDeliveryChallanHTML(bill,challan){
+  var rows=(challan.items||[]).map(function(it,i){
+    return '<tr style="background:'+(i%2?'#fefcfc':'#fff')+'">'+
+      '<td>'+(i+1)+'</td><td><strong>'+esc(it.productName)+'</strong></td>'+
+      '<td>'+fmtNum(it.casesThisRound)+'</td><td>'+fmtNum(it.looseThisRound)+'</td>'+
+      '<td style="font-weight:700;text-align:center">'+fmtNum(it.loadedThisRound)+'</td>'+
+      '<td>'+esc(it.uom||'')+'</td>'+
+      '<td style="text-align:center;font-weight:700;color:'+(it.pendingAfter>0?'#dc2626':'#16a34a')+'">'+fmtNum(it.pendingAfter)+'</td></tr>';
+  }).join('');
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;padding:20px;color:#000}.hdr{background:#dc2626;color:#fff;padding:14px;text-align:center;border-radius:8px 8px 0 0;margin-bottom:10px}.hdr h1{font-size:22px;margin-bottom:2px}.hdr p{font-size:11px}.hdr .doc-tag{margin-top:6px;font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase}.meta{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:12px}.mb{background:#fef2f2;border:1px solid #fca5a5;padding:8px;border-radius:6px}.mb label{display:block;font-size:9px;font-weight:700;color:#7f1d1d;text-transform:uppercase}.mb span{font-size:13px;font-weight:700}table{width:100%;border-collapse:collapse}th{background:#dc2626;color:#fff;padding:7px 6px;text-align:left;font-size:11px}td{padding:5px 6px;border-bottom:1px solid #f3f4f6;font-size:11px}.ftr{margin-top:16px;border-top:1px solid #ccc;padding-top:10px;display:flex;justify-content:space-between}@media print{body{padding:0}}</style></head><body>'+
+    '<div class="hdr"><h1>GLT FIREWORKS</h1><p>Gollagunta | Wholesale &amp; Retail Fireworks</p><p style="margin-top:4px;font-size:12px;font-weight:700">Contact: Sai Reddy, 9440116712</p><p class="doc-tag">Delivery Challan</p></div>'+
+    '<div class="meta">'+
+      '<div class="mb"><label>Customer</label><span>'+esc(bill.customerName||'')+'</span></div>'+
+      '<div class="mb"><label>Estimate Number</label><span>#'+esc(bill.billNumber)+'</span></div>'+
+      '<div class="mb"><label>Delivery Round</label><span>#'+challan.seq+'</span></div>'+
+      '<div class="mb"><label>Date</label><span>'+todayDisp()+'</span></div>'+
+    '</div>'+
+    '<table><thead><tr><th>#</th><th>ITEM</th><th>CASES</th><th>LOOSE</th><th>QTY LOADED</th><th>UOM</th><th>PENDING</th></tr></thead>'+
+    '<tbody>'+rows+'</tbody></table>'+
+    '<div class="ftr"><div><strong>GLT FIREWORKS, GOLLAGUNTA</strong><br><small>Thank you! &#128150;</small></div><div style="text-align:right"><p>Authorized Signature</p><div style="border-top:1px solid #000;width:140px;margin-top:24px;padding-top:4px">___________________</div></div></div>'+
+    '</body></html>';
+}
+
+window.shareChallanWhatsApp=function(url,customerName,seq){
+  if(!url){toast('The PDF is not ready yet — try again in a moment.','err');return;}
+  var wa=waOpener();
+  wa.send('Delivery Challan #'+seq+' — '+customerName+'\nView / Download PDF:\n'+url);
+};
+
+function buildDeliveryTimelineHtml(bill,challans){
+  var closed=bill.orderStatus==='closed';
+  var nodes=[{
+    title: closed?'&#9989; Order Closed':'&#128666; Work In Progress',
+    time: challans.length?fmtAuditTime(challans[challans.length-1].createdAt):'',
+    detail: closed?'Every item on this estimate has been fully delivered.':(fmtNum(billTotalPending(bill))+' units still pending across this estimate.'),
+    active:true
+  }];
+  challans.slice().reverse().forEach(function(c){
+    var itemLines=(c.items||[]).map(function(it){
+      return esc(it.productName)+': <strong>'+fmtNum(it.loadedThisRound)+' '+esc(it.uom||'')+'</strong>'+
+        (it.casesThisRound?' ('+fmtNum(it.casesThisRound)+' cs + '+fmtNum(it.looseThisRound)+')':'');
+    }).join('<br>');
+    var custJs=esc(bill.customerName).replace(/'/g,"\\'");
+    var urlJs=esc(c.pdfUrl||'').replace(/'/g,"\\'");
+    var actions=c.pdfUrl?('<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">'+
+      '<button class="btn btn-b btn-sm" onclick="window.open(\''+urlJs+'\',\'_blank\')">&#128424; View Challan</button>'+
+      '<button class="btn btn-sm" style="background:#25D366;color:#fff" onclick="shareChallanWhatsApp(\''+urlJs+'\',\''+custJs+'\','+c.seq+')">&#128241; WhatsApp</button>'+
+      '</div>'):'<div style="margin-top:6px;color:var(--text-muted);font-size:12.5px">Preparing PDF&hellip;</div>';
+    nodes.push({
+      title:'Delivery Round #'+c.seq+' — '+fmtNum(c.totalQtyLoaded)+' units loaded',
+      time: fmtAuditTime(c.createdAt),
+      detail: itemLines+'<div style="margin-top:4px;color:var(--text-muted);font-size:12.5px">by '+esc(c.createdBy||'unknown')+' &middot; whole-estimate pending after this round: '+fmtNum(c.totalQtyPending)+'</div>'+actions
+    });
+  });
+  nodes.push({title:'Estimate Created', time: esc(bill.displayDate||''), detail:'Estimate #'+esc(bill.billNumber)+' prepared for '+esc(bill.customerName)+'.'});
+
+  return '<div class="dl-timeline">'+nodes.map(function(n,idx){
+    return '<div class="dl-tl-item'+(n.active?' active':'')+(idx===nodes.length-1?' last':'')+'">'+
+      '<div class="dl-tl-dot"></div>'+
+      '<div class="dl-tl-body"><div class="dl-tl-title">'+n.title+'</div>'+
+      (n.time?'<div class="dl-tl-time">'+esc(n.time)+'</div>':'')+
+      '<div class="dl-tl-detail">'+n.detail+'</div></div></div>';
+  }).join('')+'</div>';
+}
+
+// Purely informational here — status badge + Delivery History up top (no scrolling
+// past the item list to find it), item table below. Starting/ending a loading round,
+// and editing Loaded, now only happens on the Billing "Edit Estimate" screen.
 function showBillPreview(bill){
+  window._bpBill=bill;
   var searchBox=(bill.items||[]).length>3?'<div class="fg" style="margin-bottom:10px"><div class="srch-wrap"><span class="srch-ico">&#128269;</span><input class="srch-inp" id="bp-search" placeholder="Search items in this bill..." autocomplete="off"></div></div>':'';
+  var pending=billTotalPending(bill);
+  var closed=bill.orderStatus==='closed';
+  var loadingActive=!!bill.loadingActive;
+  var statusBadge=closed
+    ?'<span class="tag" style="background:#16a34a22;color:#16a34a;font-weight:700;padding:8px 12px;border-radius:10px">&#9989; Order Closed</span>'
+    :(loadingActive
+      ?'<span class="tag" style="background:#f59e0b22;color:#f59e0b;font-weight:700;padding:8px 12px;border-radius:10px">&#128666; Loading in progress'+(bill.loadingStartedBy?' — started by '+esc(bill.loadingStartedBy):'')+' — open Edit Estimate to log it</span>'
+      :'<span class="tag" style="background:#dc262622;color:#dc2626;font-weight:700;padding:8px 12px;border-radius:10px">&#8987; '+fmtNum(pending)+' units pending</span>');
   showModal(
     '<div class="modal" style="max-width:980px">'+
     '<div class="modal-hdr"><span class="modal-title">&#9989; Estimate Saved — #'+esc(bill.billNumber)+'</span><button class="modal-x" onclick="closeModal()">&#10005;</button></div>'+
@@ -2286,6 +2554,9 @@ function showBillPreview(bill){
         '<div class="bill-box"><div class="bl">Date</div><div class="bv">'+esc(bill.displayDate||'')+'</div></div>'+
 
       '</div>'+
+      '<div style="margin-bottom:12px">'+statusBadge+'</div>'+
+      '<div style="margin-bottom:20px"><div class="card-title" style="margin-bottom:10px">&#128203; Delivery History</div>'+
+        '<div id="bp-timeline"><div class="empty-txt" style="padding:10px;color:var(--text-muted)">Loading...</div></div></div>'+
       searchBox+
       '<div id="bp-rows-wrap">'+buildBillPreviewRows(bill,'')+'</div>'+
     '</div>'+
@@ -2304,6 +2575,10 @@ function showBillPreview(bill){
       if(w) w.innerHTML=buildBillPreviewRows(bill,e.target.value);
     });
   }
+  apiGetBillChallans(bill._id,function(challans){
+    var el=document.getElementById('bp-timeline');
+    if(el) el.innerHTML=buildDeliveryTimelineHtml(bill,challans||[]);
+  });
 }
 
 // == PRINT / PDF ==
@@ -3177,10 +3452,12 @@ function renderHistoryList(){
   var cards=list.map(function(b){
     var verBadge=(b.version||1)>1?'<span class="version-badge">v'+(b.version||1)+'</span>':'';
     var parentBadge=b.parentBillId?'<span class="tag tag-b" style="font-size:12px">Edited</span>':'';
+    var closedBadge=b.orderStatus==='closed'?'<span class="tag" style="background:rgba(22,163,74,0.16);color:#16a34a;font-size:12px">&#9989; Closed</span>':'';
+    var loadingBadge=(!b.orderStatus||b.orderStatus!=='closed')&&b.loadingActive?'<span class="tag" style="background:rgba(245,158,11,0.16);color:#fbbf24;font-size:12px">&#128666; Loading</span>':'';
     var pendingItems=(b.items||[]).filter(function(it){return (it.qtyPending||0)>0;});
-    var pendingBadge=pendingItems.length?'<span class="tag" style="background:rgba(245,158,11,0.16);color:#fbbf24;font-size:12px">&#9888; '+pendingItems.length+' pending</span>':'';
-    // qtyPending is clamped at 0, so an over-load (loaded qty > ordered qty) needs its own check
-    var overloadedItems=(b.items||[]).filter(function(it){return (Number(it.qtyLoaded)||0)>(Number(it.totalQty)||0);});
+    var pendingBadge=(!closedBadge&&pendingItems.length)?'<span class="tag" style="background:rgba(245,158,11,0.16);color:#fbbf24;font-size:12px">&#9888; '+pendingItems.length+' pending</span>':'';
+    // qtyPending is clamped at 0, so an over-load (loaded beyond what's still owed) needs its own check
+    var overloadedItems=(b.items||[]).filter(function(it){return (Number(it.qtyLoaded)||0)>Math.max(0,(Number(it.totalQty)||0)-(Number(it.qtyDelivered)||0));});
     var overloadedBadge=overloadedItems.length?'<span class="tag tag-r" style="font-size:12px">&#9888; '+overloadedItems.length+' over-loaded</span>':'';
     var lockInfo=billLocks[b._id];
     var lockBadge=lockInfo?'<span class="tag tag-r" style="font-size:12px">&#128274; Editing: '+esc(lockInfo.username||'someone')+'</span>':'';
@@ -3193,7 +3470,7 @@ function renderHistoryList(){
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">'+
         '<div>'+
           '<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">'+
-            '<span class="tag tag-r">#'+esc(b.billNumber)+'</span>'+verBadge+parentBadge+pendingBadge+overloadedBadge+lockBadge+
+            '<span class="tag tag-r">#'+esc(b.billNumber)+'</span>'+verBadge+parentBadge+closedBadge+loadingBadge+pendingBadge+overloadedBadge+lockBadge+
             '<span style="font-size:14px;color:var(--gy)">'+esc(b.displayDate||'')+'</span>'+
           '</div>'+
           '<div style="font-weight:700;font-size:17px">'+esc(b.customerName)+'</div>'+
@@ -3291,11 +3568,19 @@ function buildPriceLookupResults(){
     }).join('');
     var st=(p.stock||0);
     return '<tr><td style="font-weight:700;font-size:14px">'+codeBadge(prodCode(p))+esc(p.name)+pimg(p)+'</td>'+
-      '<td class="'+stockClass(st)+'" style="text-align:center;font-weight:700">'+fmtNum(st)+'</td>'+cells+'</tr>';
+      '<td class="'+stockClass(st)+'" style="text-align:center;font-weight:700">'+fmtNum(st)+'</td>'+
+      '<td class="num">'+(p.qtyPerCase?fmtNum(p.qtyPerCase):'<span style="color:var(--text-muted)">—</span>')+'</td>'+cells+'</tr>';
   }).join('');
   var moreNote=totalMatches>100
     ?'<div style="font-size:13.5px;color:var(--text-muted);margin-top:6px">Showing first 100 matches — refine your search for more precise results.</div>':'';
-  return '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Item</th><th>Stock</th>'+colHeaders+'</tr></thead><tbody>'+rows+'</tbody></table></div>'+moreNote;
+  // fixed layout + explicit column widths so every numeric column stays the same width no
+  // matter how long product names get — only the Item column flexes with its content.
+  var numCols=2+cols.length; // Stock + Qty/Case + each reference/cost column
+  var numColPct=(58/numCols).toFixed(2);
+  var colgroup='<colgroup><col style="width:42%">'+
+    new Array(numCols).fill('<col style="width:'+numColPct+'%">').join('')+'</colgroup>';
+  return '<div class="tbl-wrap"><table class="tbl pricelookup-tbl">'+colgroup+
+    '<thead><tr><th>Item</th><th>Stock</th><th>Qty/Case</th>'+colHeaders+'</tr></thead><tbody>'+rows+'</tbody></table></div>'+moreNote;
 }
 
 function updatePriceLookupResults(){
@@ -5435,6 +5720,27 @@ function apiFetchBillLocks(cb) {
       console.log("Failed to fetch bill locks:", err);
       if (cb) cb();
     });
+}
+
+// == DELIVERY / LOADING (Start Loading -> Loaded column unlocks -> End Loading -> challan) ==
+function apiStartBillLoading(billId, cb) {
+  if (!cloudOn()) { if (cb) cb({status:'error', message:'Please log in first'}); return; }
+  apiCall('startBillLoading', {billId: billId}, function(res) { if (cb) cb(res || {status:'error'}); });
+}
+function apiEndBillLoading(billId, cb) {
+  if (!cloudOn()) { if (cb) cb({status:'error', message:'Please log in first'}); return; }
+  apiCall('endBillLoading', {billId: billId}, function(res) { if (cb) cb(res || {status:'error'}); });
+}
+function apiGetBillChallans(billId, cb) {
+  if (!cloudOn()) { if (cb) cb([]); return; }
+  apiCall('getBillChallans', {billId: billId}, function(res) {
+    cb((res && res.status === 'success' && res.challans) || []);
+  });
+}
+function apiSaveChallanPdf(challanId, billId, customerName, seq, htmlContent, cb) {
+  if (!cloudOn()) { if (cb) cb({status:'error'}); return; }
+  apiCall('saveDeliveryChallanPdf', {challanId: challanId, billId: billId, customerName: customerName, seq: seq, htmlContent: htmlContent},
+    function(res) { if (cb) cb(res || {status:'error'}); });
 }
 
 // Saves the estimate to the cloud database. The shareable PDF link is created
