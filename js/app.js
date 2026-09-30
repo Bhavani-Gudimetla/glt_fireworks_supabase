@@ -1906,7 +1906,7 @@ function updateItemPrice(i, val) {
   var item = billItems[i];
   item.sellingPrice = price;
   item.totalAmount  = (item.totalQty || 0) * price;
-  item.qtyPending   = Math.max(0, (item.totalQty || 0) - (item.qtyLoaded || 0));
+  item.qtyPending   = Math.max(0, (item.totalQty || 0) - (item.qtyDelivered || 0) - (item.qtyLoaded || 0));
 
   var targetRef = billRef || '1';
 
@@ -1994,7 +1994,7 @@ function updateItemCases(i, val) {
       var newQty = Math.round(cases * qpc);
       billItems[i].totalQty    = newQty;
       billItems[i].totalAmount = newQty * (billItems[i].sellingPrice || 0);
-      billItems[i].qtyPending  = Math.max(0, newQty - (billItems[i].qtyLoaded || 0));
+      billItems[i].qtyPending  = Math.max(0, newQty - (billItems[i].qtyDelivered || 0) - (billItems[i].qtyLoaded || 0));
     }
     onBillItemsChanged();
     var w = document.getElementById('bi-table-wrap');
@@ -2011,7 +2011,7 @@ function updateItemQpc(i, val) {
       var newQty = Math.round(billItems[i].cases * qpc);
       billItems[i].totalQty    = newQty;
       billItems[i].totalAmount = newQty * (billItems[i].sellingPrice || 0);
-      billItems[i].qtyPending  = Math.max(0, newQty - (billItems[i].qtyLoaded || 0));
+      billItems[i].qtyPending  = Math.max(0, newQty - (billItems[i].qtyDelivered || 0) - (billItems[i].qtyLoaded || 0));
       toast('Order Qty: ' + billItems[i].cases + ' × ' + qpc + ' = ' + newQty, 'ok');
     }
     onBillItemsChanged();
@@ -2028,7 +2028,7 @@ function updateItemQty(i, val) {
     var qpc = billItems[i].qtyPerCase || 0;
     billItems[i].totalQty    = qty;
     billItems[i].totalAmount = qty * (billItems[i].sellingPrice || 0);
-    billItems[i].qtyPending  = Math.max(0, qty - (billItems[i].qtyLoaded || 0));
+    billItems[i].qtyPending  = Math.max(0, qty - (billItems[i].qtyDelivered || 0) - (billItems[i].qtyLoaded || 0));
     // IMPORTANT: preserve cases — only update cases if QPC is known
     if (qpc > 0) {
       billItems[i].cases = Math.floor(qty / qpc);
@@ -2127,7 +2127,7 @@ function syncBillItemsFromDOM() {
     }
 
     item.totalAmount = (item.totalQty || 0) * (item.sellingPrice || 0);
-    item.qtyPending  = Math.max(0, (item.totalQty || 0) - (item.qtyLoaded || 0));
+    item.qtyPending  = Math.max(0, (item.totalQty || 0) - (item.qtyDelivered || 0) - (item.qtyLoaded || 0));
     billItems[i] = item;
   });
 }
@@ -2460,41 +2460,53 @@ window.endLoadingUi=function(billId){
   });
 };
 
+// Each delivery round is labelled like a sub-estimate of the original — 1st round
+// off estimate "B100" is "B100A", 2nd is "B100B", and so on (never "Delivery Round #2").
+function challanLabel(billNumber,seq){
+  var letter=String.fromCharCode(64+Math.max(1,Number(seq)||1));
+  return String(billNumber||'')+letter;
+}
+
 // Styled like a standard GLT Fireworks bill (see buildBillHTML) — company header,
-// customer/estimate meta, item table, authorised-signatory footer. No separate
-// "total loaded" / "pending" summary lines — the Pending column in the table already
-// carries that, same as an ordinary bill.
+// customer/estimate meta, item table with Price/Amount and a grand total, exactly
+// like the main estimate, plus an authorised-signatory footer.
 function buildDeliveryChallanHTML(bill,challan){
+  var grand=0;
   var rows=(challan.items||[]).map(function(it,i){
+    var amt=it.amountThisRound!=null?Number(it.amountThisRound):(Number(it.loadedThisRound)||0)*(Number(it.sellingPrice)||0);
+    grand+=amt;
     return '<tr style="background:'+(i%2?'#fefcfc':'#fff')+'">'+
       '<td>'+(i+1)+'</td><td><strong>'+esc(it.productName)+'</strong></td>'+
       '<td>'+fmtNum(it.casesThisRound)+'</td><td>'+fmtNum(it.looseThisRound)+'</td>'+
       '<td style="font-weight:700;text-align:center">'+fmtNum(it.loadedThisRound)+'</td>'+
       '<td>'+esc(it.uom||'')+'</td>'+
+      '<td>&#8377;'+fmtNum(it.sellingPrice||0)+'</td>'+
+      '<td style="font-weight:700;text-align:right">'+fmtMoney(amt)+'</td>'+
       '<td style="text-align:center;font-weight:700;color:'+(it.pendingAfter>0?'#dc2626':'#16a34a')+'">'+fmtNum(it.pendingAfter)+'</td></tr>';
   }).join('');
-  return '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;padding:20px;color:#000}.hdr{background:#dc2626;color:#fff;padding:14px;text-align:center;border-radius:8px 8px 0 0;margin-bottom:10px}.hdr h1{font-size:22px;margin-bottom:2px}.hdr p{font-size:11px}.hdr .doc-tag{margin-top:6px;font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase}.meta{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:12px}.mb{background:#fef2f2;border:1px solid #fca5a5;padding:8px;border-radius:6px}.mb label{display:block;font-size:9px;font-weight:700;color:#7f1d1d;text-transform:uppercase}.mb span{font-size:13px;font-weight:700}table{width:100%;border-collapse:collapse}th{background:#dc2626;color:#fff;padding:7px 6px;text-align:left;font-size:11px}td{padding:5px 6px;border-bottom:1px solid #f3f4f6;font-size:11px}.ftr{margin-top:16px;border-top:1px solid #ccc;padding-top:10px;display:flex;justify-content:space-between}@media print{body{padding:0}}</style></head><body>'+
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;padding:20px;color:#000}.hdr{background:#dc2626;color:#fff;padding:14px;text-align:center;border-radius:8px 8px 0 0;margin-bottom:10px}.hdr h1{font-size:22px;margin-bottom:2px}.hdr p{font-size:11px}.hdr .doc-tag{margin-top:6px;font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase}.meta{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:12px}.mb{background:#fef2f2;border:1px solid #fca5a5;padding:8px;border-radius:6px}.mb label{display:block;font-size:9px;font-weight:700;color:#7f1d1d;text-transform:uppercase}.mb span{font-size:13px;font-weight:700}table{width:100%;border-collapse:collapse}th{background:#dc2626;color:#fff;padding:7px 6px;text-align:left;font-size:11px}td{padding:5px 6px;border-bottom:1px solid #f3f4f6;font-size:11px}.tot{background:#fef9c3;font-weight:700;font-size:13px}.ftr{margin-top:16px;border-top:1px solid #ccc;padding-top:10px;display:flex;justify-content:space-between}@media print{body{padding:0}}</style></head><body>'+
     '<div class="hdr"><h1>GLT FIREWORKS</h1><p>Gollagunta | Wholesale &amp; Retail Fireworks</p><p style="margin-top:4px;font-size:12px;font-weight:700">Contact: Sai Reddy, 9440116712</p><p class="doc-tag">Delivery Challan</p></div>'+
     '<div class="meta">'+
       '<div class="mb"><label>Customer</label><span>'+esc(bill.customerName||'')+'</span></div>'+
       '<div class="mb"><label>Estimate Number</label><span>#'+esc(bill.billNumber)+'</span></div>'+
-      '<div class="mb"><label>Delivery Round</label><span>#'+challan.seq+'</span></div>'+
+      '<div class="mb"><label>Challan No.</label><span>#'+esc(challanLabel(bill.billNumber,challan.seq))+'</span></div>'+
       '<div class="mb"><label>Date</label><span>'+todayDisp()+'</span></div>'+
     '</div>'+
-    '<table><thead><tr><th>#</th><th>ITEM</th><th>CASES</th><th>LOOSE</th><th>QTY LOADED</th><th>UOM</th><th>PENDING</th></tr></thead>'+
-    '<tbody>'+rows+'</tbody></table>'+
+    '<table><thead><tr><th>#</th><th>ITEM</th><th>CASES</th><th>LOOSE</th><th>QTY LOADED</th><th>UOM</th><th>PRICE</th><th>AMOUNT</th><th>PENDING</th></tr></thead>'+
+    '<tbody>'+rows+'<tr class="tot"><td colspan="6"></td><td>TOTAL</td><td style="text-align:right">&#8377;'+Number(grand).toLocaleString('en-IN',{minimumFractionDigits:2})+'</td><td></td></tr></tbody></table>'+
     '<div class="ftr"><div><strong>GLT FIREWORKS, GOLLAGUNTA</strong><br><small>Thank you! &#128150;</small></div><div style="text-align:right"><p>Authorized Signature</p><div style="border-top:1px solid #000;width:140px;margin-top:24px;padding-top:4px">___________________</div></div></div>'+
     '</body></html>';
 }
 
-window.shareChallanWhatsApp=function(url,customerName,seq){
+window.shareChallanWhatsApp=function(url,customerName,billNumber,seq){
   if(!url){toast('The PDF is not ready yet — try again in a moment.','err');return;}
   var wa=waOpener();
-  wa.send('Delivery Challan #'+seq+' — '+customerName+'\nView / Download PDF:\n'+url);
+  wa.send('Delivery Challan #'+challanLabel(billNumber,seq)+' — '+customerName+'\nView / Download PDF:\n'+url);
 };
 
 function buildDeliveryTimelineHtml(bill,challans){
   var closed=bill.orderStatus==='closed';
+  var isAdmin=userRole==='admin';
   var nodes=[{
     title: closed?'&#9989; Order Closed':'&#128666; Work In Progress',
     time: challans.length?fmtAuditTime(challans[challans.length-1].createdAt):'',
@@ -2504,16 +2516,21 @@ function buildDeliveryTimelineHtml(bill,challans){
   challans.slice().reverse().forEach(function(c){
     var itemLines=(c.items||[]).map(function(it){
       return esc(it.productName)+': <strong>'+fmtNum(it.loadedThisRound)+' '+esc(it.uom||'')+'</strong>'+
-        (it.casesThisRound?' ('+fmtNum(it.casesThisRound)+' cs + '+fmtNum(it.looseThisRound)+')':'');
+        (it.casesThisRound?' ('+fmtNum(it.casesThisRound)+' cs + '+fmtNum(it.looseThisRound)+')':'')+
+        (it.amountThisRound?' — '+fmtMoney(it.amountThisRound):'');
     }).join('<br>');
     var custJs=esc(bill.customerName).replace(/'/g,"\\'");
     var urlJs=esc(c.pdfUrl||'').replace(/'/g,"\\'");
-    var actions=c.pdfUrl?('<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">'+
-      '<button class="btn btn-b btn-sm" onclick="window.open(\''+urlJs+'\',\'_blank\')">&#128424; View Challan</button>'+
-      '<button class="btn btn-sm" style="background:#25D366;color:#fff" onclick="shareChallanWhatsApp(\''+urlJs+'\',\''+custJs+'\','+c.seq+')">&#128241; WhatsApp</button>'+
-      '</div>'):'<div style="margin-top:6px;color:var(--text-muted);font-size:12.5px">Preparing PDF&hellip;</div>';
+    var billIdJs=esc(bill._id).replace(/'/g,"\\'");
+    var chIdJs=esc(c.id).replace(/'/g,"\\'");
+    var actions='<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">'+
+      (c.pdfUrl?'<button class="btn btn-b btn-sm" onclick="window.open(\''+urlJs+'\',\'_blank\')">&#128424; View Challan</button>'+
+        '<button class="btn btn-sm" style="background:#25D366;color:#fff" onclick="shareChallanWhatsApp(\''+urlJs+'\',\''+custJs+'\',\''+esc(bill.billNumber)+'\','+c.seq+')">&#128241; WhatsApp</button>'
+        :'<span style="color:var(--text-muted);font-size:12.5px;align-self:center">Preparing PDF&hellip;</span>')+
+      (isAdmin?'<button class="btn btn-o btn-sm" onclick="editChallanUi(\''+billIdJs+'\',\''+chIdJs+'\')">&#9999; Edit</button>':'')+
+      '</div>';
     nodes.push({
-      title:'Delivery Round #'+c.seq+' — '+fmtNum(c.totalQtyLoaded)+' units loaded',
+      title:'Estimate '+challanLabel(bill.billNumber,c.seq)+' — '+fmtNum(c.totalQtyLoaded)+' units loaded'+(c.totalAmountLoaded?' ('+fmtMoney(c.totalAmountLoaded)+')':''),
       time: fmtAuditTime(c.createdAt),
       detail: itemLines+'<div style="margin-top:4px;color:var(--text-muted);font-size:12.5px">by '+esc(c.createdBy||'unknown')+' &middot; whole-estimate pending after this round: '+fmtNum(c.totalQtyPending)+'</div>'+actions
     });
@@ -2528,6 +2545,60 @@ function buildDeliveryTimelineHtml(bill,challans){
       '<div class="dl-tl-detail">'+n.detail+'</div></div></div>';
   }).join('')+'</div>';
 }
+
+// == EDIT A PAST DELIVERY CHALLAN (admin only) ==
+// A small modal, not the full loading workflow: just correct the Loaded quantities
+// of one already-recorded round. Saving recalculates that round's own totals AND
+// folds the difference into the estimate's running Delivered/Pending — same numbers
+// everywhere (estimate, Pending Loads, the timeline) update together.
+window.editChallanUi=function(billId,challanId){
+  var bill=bills.find(function(b){return b._id===billId;});
+  if(!bill){toast('Estimate not found','err');return;}
+  apiGetBillChallans(billId,function(challans){
+    var challan=(challans||[]).find(function(c){return c.id===challanId;});
+    if(!challan){toast('Delivery challan not found','err');return;}
+    window._ecChallan=challan; window._ecBill=bill;
+    var rows=(challan.items||[]).map(function(it,i){
+      return '<div class="fg" style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'+
+        '<div style="flex:1;font-size:14px;font-weight:600">'+esc(it.productName)+' <span style="color:var(--text-muted);font-size:12.5px">('+esc(it.uom||'')+')</span></div>'+
+        '<input type="number" min="0" id="ec-qty-'+i+'" value="'+(it.loadedThisRound||0)+'" style="width:90px;padding:8px;border-radius:8px;text-align:center;font-weight:700;background:var(--input-bg);border:1px solid var(--input-border)">'+
+      '</div>';
+    }).join('');
+    showModal('<div class="modal" style="max-width:520px">'+
+      '<div class="modal-hdr"><span class="modal-title">&#9999; Edit Estimate '+esc(challanLabel(bill.billNumber,challan.seq))+'</span><button class="modal-x" onclick="closeModal()">&#10005;</button></div>'+
+      '<div class="modal-body">'+
+        '<p style="font-size:13.5px;color:var(--text-muted);margin-bottom:14px">Correct how much was actually loaded in this round. The estimate\'s Delivered and Pending totals will be recalculated automatically.</p>'+
+        rows+
+      '</div>'+
+      '<div class="modal-ftr"><button class="btn btn-gh" onclick="closeModal()">Cancel</button><button class="btn btn-r" onclick="saveEditedChallan()">&#128190; Save</button></div>'+
+    '</div>');
+  });
+};
+
+window.saveEditedChallan=function(){
+  var challan=window._ecChallan, bill=window._ecBill;
+  if(!challan||!bill)return;
+  var items=(challan.items||[]).map(function(it,i){
+    var el=document.getElementById('ec-qty-'+i);
+    return {productId:it.productId||null, productName:it.productName, loadedThisRound: el?(parseFloat(el.value)||0):(it.loadedThisRound||0)};
+  });
+  toast('Saving corrected delivery...','info');
+  apiEditDeliveryChallan(challan.id,items,function(res){
+    if(!res||res.status!=='success'){toast('Could not save: '+((res&&res.message)||'unknown error'),'err');return;}
+    var idx=bills.findIndex(function(b){return b._id===bill._id;});
+    if(idx>=0){ bills[idx]=Object.assign({},bills[idx],res.bill); saveAll(); }
+    var freshBill=idx>=0?bills[idx]:res.bill;
+    var freshChallan=res.challan;
+    closeModal();
+    toast('&#9989; Delivery challan updated.','ok');
+    if(freshChallan&&freshChallan.items&&freshChallan.items.length){
+      var html=buildDeliveryChallanHTML(freshBill,freshChallan);
+      apiSaveChallanPdf(freshChallan.id,bill._id,freshBill.customerName,freshChallan.seq,html,function(){});
+    }
+    if(window._bpBill&&window._bpBill._id===bill._id) showBillPreview(freshBill);
+    if(window._editingOriginalId===bill._id){ billItems=freshBill.items; renderBilling(); }
+  });
+};
 
 // Purely informational here — status badge + Delivery History up top (no scrolling
 // past the item list to find it), item table below. Starting/ending a loading round,
@@ -3575,11 +3646,15 @@ function buildPriceLookupResults(){
     ?'<div style="font-size:13.5px;color:var(--text-muted);margin-top:6px">Showing first 100 matches — refine your search for more precise results.</div>':'';
   // fixed layout + explicit column widths so every numeric column stays the same width no
   // matter how long product names get — only the Item column flexes with its content.
+  // A minimum total width keeps every column readable on a phone: once the screen is
+  // narrower than that, .tbl-wrap scrolls horizontally instead of squeezing values
+  // down to illegible ellipsised text.
   var numCols=2+cols.length; // Stock + Qty/Case + each reference/cost column
   var numColPct=(58/numCols).toFixed(2);
   var colgroup='<colgroup><col style="width:42%">'+
     new Array(numCols).fill('<col style="width:'+numColPct+'%">').join('')+'</colgroup>';
-  return '<div class="tbl-wrap"><table class="tbl pricelookup-tbl">'+colgroup+
+  var minWidthPx=200+numCols*88;
+  return '<div class="tbl-wrap"><table class="tbl pricelookup-tbl" style="min-width:'+minWidthPx+'px">'+colgroup+
     '<thead><tr><th>Item</th><th>Stock</th><th>Qty/Case</th>'+colHeaders+'</tr></thead><tbody>'+rows+'</tbody></table></div>'+moreNote;
 }
 
@@ -5741,6 +5816,10 @@ function apiSaveChallanPdf(challanId, billId, customerName, seq, htmlContent, cb
   if (!cloudOn()) { if (cb) cb({status:'error'}); return; }
   apiCall('saveDeliveryChallanPdf', {challanId: challanId, billId: billId, customerName: customerName, seq: seq, htmlContent: htmlContent},
     function(res) { if (cb) cb(res || {status:'error'}); });
+}
+function apiEditDeliveryChallan(challanId, items, cb) {
+  if (!cloudOn()) { if (cb) cb({status:'error', message:'Please log in first'}); return; }
+  apiCall('editDeliveryChallan', {challanId: challanId, items: items}, function(res) { if (cb) cb(res || {status:'error'}); });
 }
 
 // Saves the estimate to the cloud database. The shareable PDF link is created

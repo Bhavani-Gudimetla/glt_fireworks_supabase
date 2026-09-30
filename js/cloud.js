@@ -469,6 +469,9 @@ var GLTCloud = (function () {
           .then(function (r) { return { status: 'success', challan: r && r.challan, bill: r && r.bill }; });
       case 'getBillChallans':
         return rpc('get_bill_challans', { p_bill_id: String(d.billId) }).then(function (r) { return { status: 'success', challans: r || [] }; });
+      case 'editDeliveryChallan':
+        return rpc('edit_delivery_challan', { p_challan_id: String(d.challanId), p_items: d.items || [] })
+          .then(function (r) { return { status: 'success', challan: r && r.challan, bill: r && r.bill }; });
       case 'saveDeliveryChallanPdf': {
         var chId = String(d.challanId), chBillId = String(d.billId);
         var d1 = new Date(), dc1 = ('0' + d1.getDate()).slice(-2) + ('0' + (d1.getMonth() + 1)).slice(-2) + String(d1.getFullYear()).slice(-2);
