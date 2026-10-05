@@ -247,6 +247,7 @@ function closeModal(){
   var mc = document.getElementById('modal-container');
   mc.innerHTML='';
   mc.style.display='none'; // Hide so it doesn't block clicks
+  window._bpBill=null;     // the estimate preview is no longer open — don't let later actions reopen it
   // If on history tab, refresh list to show any updates
   if (curTab === 'history' && typeof renderHistoryList === 'function') {
     renderHistoryList();
@@ -334,13 +335,32 @@ function goTabNoSync(id) {
 // Direct home navigation - bypasses all guards
 // Works from anywhere including billing/edit mode
 // Small round arrow shown at the top-left of every page except Home itself.
-function backBtn(){ return '<button class="back-btn" onclick="exitToHome()" title="Back to Home">&#8592;</button>'; }
+function backBtn(){ return '<button class="back-btn" onclick="goBack()" title="Back">&#8592;</button>'; }
+
+// Screens visited before the current one (most recent last). Back goes to the one
+// before; with nothing earlier it goes Home. goTab() records, goBack() consumes.
+var navStack=[];
+var navGoingBack=false;
+function goBack(){
+  var mc=document.getElementById('modal-container');
+  if(mc&&mc.innerHTML){ closeModal(); return; }
+  var target=null;
+  while(navStack.length){
+    var t=navStack.pop();
+    if(t&&t!==curTab&&t!=='home'){ target=t; break; }
+  }
+  if(!target){ exitToHome(); return; }
+  navGoingBack=true;
+  try{ goTab(target); } finally { navGoingBack=false; }
+}
 
 function exitToHome(){
+  navStack=[];
   try {
     // Close any open modal first
     var mc = document.getElementById('modal-container');
     if(mc){ mc.innerHTML=''; mc.style.display='none'; }
+    window._bpBill=null;
 
     // Auto-save bill if complete
     if(billItems && billItems.length > 0 && billCustomer && billCustomer.trim() && billRef){
@@ -403,7 +423,11 @@ function goTab(id){
     // incomplete bills stay in memory for later
   }
 
-  // Navigate
+  // Navigate (remember where we came from so Back can return there)
+  if(!navGoingBack && curTab && curTab!==id && navStack[navStack.length-1]!==curTab){
+    navStack.push(curTab);
+    if(navStack.length>25) navStack.shift();
+  }
   curTab = id;
   document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});
   var pg = document.getElementById('pg-'+id);
@@ -603,6 +627,7 @@ function enterApp(profile) {
   document.getElementById('user-role-badge').innerText = userRole.toUpperCase();
   document.getElementById('user-profile-nav').className = 'user-badge ' + (userRole === 'admin' ? 'tag-pu' : 'tag-b');
   curTab = 'home';
+  navStack = [];
   document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});
   document.getElementById('pg-home').classList.add('active');
   renderPage('home');                    // instant, from local data
@@ -1179,11 +1204,12 @@ function buildBillItemsTableOnly(){
     return !q || billItems[i].productName.toLowerCase().indexOf(q)>=0;
   });
 
-  // A saved estimate's Loaded column is only editable during an active loading
-  // session (started from the estimate's Preview) — this screen is for editing
-  // the order itself, not for logging deliveries.
+  // Loaded stays typeable on a bill until its first sub estimate has been created (the
+  // first load simply uses whatever is typed here). After that, it is locked again
+  // between loads — it only opens during an active loading session (Start Loading).
   var editingBill  = window._editingOriginalId ? bills.find(function(b){return b._id===window._editingOriginalId;}) : null;
-  var loadedLocked = !!editingBill && !editingBill.loadingActive;
+  var firstLoadDone = billItems.some(function(it){return (Number(it.qtyDelivered)||0)>0;});
+  var loadedLocked = !!editingBill && !editingBill.loadingActive && firstLoadDone;
 
   // Common cell style with vertical border
   var tdBorder = 'border-right:1px solid var(--card-border);';
@@ -1430,36 +1456,83 @@ function buildLoadingBarHtml(editingBill){
 // edited — Order Qty / UOM / Qty-per-case are read-only (the order itself isn't being
 // changed mid-delivery), only Loaded is editable, and there's no Price/Amount/Cases
 // columns to scroll past.
-function buildLoadingModeHtml(){
+// Same colour code as the estimate itself, judged on everything loaded so far
+// (Delivered + Loaded) against the ordered quantity:
+//   still to load -> blue (the number left)   exactly loaded -> green 0   over-loaded -> RED "+N"
+function loadStatus(item){
+  var total=Number(item.totalQty)||0, del=Number(item.qtyDelivered)||0, ld=Number(item.qtyLoaded)||0;
+  var diff=Math.round((del+ld-total)*1000)/1000;
+  if(diff>0) return {text:'+'+fmtNum(diff), color:'var(--red-text)', over:true};
+  if(diff<0) return {text:fmtNum(-diff), color:'var(--blue-text)', over:false};
+  return {text:'0', color:'var(--green-text)', over:false};
+}
+
+var loadingItemSearch='';
+function buildLoadingRowsHtml(){
+  var q=(loadingItemSearch||'').trim().toLowerCase();
   var rows=billItems.map(function(item,i){
+    if(q && String(item.productName||'').toLowerCase().indexOf(q)<0) return '';
     var loaded=item.qtyLoaded!=null?item.qtyLoaded:0;
     var delivered=item.qtyDelivered||0;
-    var pending=Math.max(0,(Number(item.totalQty)||0)-delivered-loaded);
-    var pendColor=pending>0?'var(--red-text)':'var(--green-text)';
+    var st=loadStatus(item);
+    var box='width:58px;padding:6px 3px;border-radius:7px;font-size:13.5px;font-weight:700;text-align:center;background:var(--input-bg);border:1px solid var(--input-border);color:var(--text-main)';
     return '<tr data-idx="'+i+'" style="border-bottom:1px solid var(--card-border)">'+
-      '<td style="padding:10px 10px;font-weight:700;font-size:14px;text-align:left">'+esc(item.productName)+'</td>'+
-      '<td style="padding:10px 6px;text-align:center">'+fmtNum(item.totalQty)+'</td>'+
-      '<td style="padding:10px 6px;text-align:center">'+esc(item.uom||'')+'</td>'+
-      '<td style="padding:10px 6px;text-align:center">'+(item.qtyPerCase?fmtNum(item.qtyPerCase):'—')+'</td>'+
-      '<td style="padding:10px 6px;text-align:center;font-weight:700;color:var(--green-text)">'+fmtNum(delivered)+'</td>'+
-      '<td style="padding:6px 4px;text-align:center">'+
-        '<input type="number" min="0" value="'+loaded+'" style="width:76px;padding:7px 4px;border-radius:8px;font-size:14px;font-weight:700;text-align:center;background:var(--input-bg);border:1.5px solid var(--brand);color:var(--text-main)" oninput="updateLoadedInEditMode('+i+',this.value)" onchange="updateLoadedInEditMode('+i+',this.value)">'+
+      '<td style="padding:8px 4px;text-align:center;color:var(--text-muted);font-size:13px">'+(i+1)+'</td>'+
+      '<td style="padding:8px 8px;font-weight:700;font-size:13.5px;text-align:left">'+esc(item.productName)+'</td>'+
+      '<td style="padding:6px 2px;text-align:center"><input type="number" min="0" step="0.5" id="lm-cs-'+i+'" value="'+(item.cases||'')+'" placeholder="—" style="'+box+'" oninput="lmEdit('+i+',\'cases\',this.value)"></td>'+
+      '<td style="padding:6px 2px;text-align:center"><input type="number" min="0" id="lm-qp-'+i+'" value="'+(item.qtyPerCase||'')+'" placeholder="—" style="'+box+'" oninput="lmEdit('+i+',\'qpc\',this.value)" title="Quantity per case for this estimate only — the product list is not changed"></td>'+
+      '<td style="padding:6px 2px;text-align:center"><input type="number" min="0" id="lm-oq-'+i+'" value="'+(item.totalQty||'')+'" placeholder="—" style="'+box+'" oninput="lmEdit('+i+',\'qty\',this.value)"></td>'+
+      '<td style="padding:8px 3px;text-align:center;font-size:12.5px">'+esc(item.uom||'')+'</td>'+
+      '<td id="lm-dl-'+i+'" style="padding:8px 3px;text-align:center;font-weight:700;color:var(--green-text)">'+fmtNum(delivered)+'</td>'+
+      '<td style="padding:6px 2px;text-align:center">'+
+        '<input type="number" min="0" id="lm-in-'+i+'" value="'+loaded+'" style="width:66px;padding:6px 3px;border-radius:8px;font-size:14px;font-weight:700;text-align:center;background:var(--input-bg);border:1.5px solid '+st.color+';color:'+st.color+'" oninput="updateLoadedInEditMode('+i+',this.value)" onchange="updateLoadedInEditMode('+i+',this.value)">'+
       '</td>'+
-      '<td id="lm-pend-'+i+'" style="padding:10px 6px;text-align:center;font-weight:800;color:'+pendColor+'">'+fmtNum(pending)+'</td>'+
+      '<td id="lm-pend-'+i+'" style="padding:8px 4px;text-align:center;font-weight:800;color:'+st.color+'">'+st.text+'</td>'+
     '</tr>';
   }).join('');
-  return '<div class="bi-head"><div class="card-title" style="margin-bottom:0">&#128666; Logging Delivery <span class="tag tag-gy">'+billItems.length+' items</span></div></div>'+
+  return rows||'<tr><td colspan="9" style="padding:18px;text-align:center;color:var(--text-muted)">No items match "'+esc(loadingItemSearch)+'"</td></tr>';
+}
+
+// Cases / Qty-per-case / Order qty can be corrected right here, linked like the estimate
+// itself (cases x qty/case = order qty). It changes THIS estimate only — never the product list.
+window.lmEdit=function(i,field,val){
+  var it=billItems[i]; if(!it)return;
+  var v=parseFloat(val); if(isNaN(v)||v<0) v=0;
+  if(field==='cases'){ it.cases=v; if((it.qtyPerCase||0)>0) it.totalQty=Math.round(v*it.qtyPerCase); }
+  else if(field==='qpc'){ it.qtyPerCase=v; if(v>0&&(it.cases||0)>0) it.totalQty=Math.round(it.cases*v); }
+  else { it.totalQty=v; if((it.qtyPerCase||0)>0) it.cases=Math.floor(v/it.qtyPerCase); }
+  it.totalAmount=(it.totalQty||0)*(it.sellingPrice||0);
+  it.qtyPending=Math.max(0,(it.totalQty||0)-(it.qtyDelivered||0)-(it.qtyLoaded||0));
+  var ids={cases:'lm-cs-',qpc:'lm-qp-',qty:'lm-oq-'}, vals={cases:it.cases,qpc:it.qtyPerCase,qty:it.totalQty};
+  Object.keys(ids).forEach(function(f){ if(f===field)return; var el=document.getElementById(ids[f]+i); if(el) el.value=vals[f]||''; });
+  var st=loadStatus(it);
+  var pc=document.getElementById('lm-pend-'+i); if(pc){pc.textContent=st.text;pc.style.color=st.color;}
+  var li=document.getElementById('lm-in-'+i); if(li){li.style.color=st.color;li.style.borderColor=st.color;}
+  saveAll();
+  clearTimeout(window._lmAutosaveTimer);
+  window._lmAutosaveTimer=setTimeout(function(){ apiCall('saveBill',{bill:buildFlushBillForLoading()},function(){}); },800);
+};
+window.onLoadingSearch=function(v){
+  loadingItemSearch=v;
+  var b=document.getElementById('lm-body'); if(b) b.innerHTML=buildLoadingRowsHtml();
+};
+
+function buildLoadingModeHtml(){
+  return '<div class="bi-head"><div class="card-title" style="margin-bottom:0">&#128666; Logging Delivery <span class="tag tag-gy">'+billItems.length+' items</span></div>'+
+      '<div class="bi-sbox open"><input class="inp" id="lm-search" value="'+esc(loadingItemSearch)+'" placeholder="Search item to load..." autocomplete="off" oninput="onLoadingSearch(this.value)"></div></div>'+
     '<div class="tbl-wrap" style="border-radius:0 0 12px 12px;overflow-x:auto">'+
     '<table style="width:100%;border-collapse:collapse">'+
     '<thead><tr>'+
-      '<th style="padding:12px 10px;text-align:left;font-size:12.5px;border-right:1px solid rgba(255,255,255,0.15)">Item</th>'+
-      '<th style="padding:12px 6px;font-size:12.5px;border-right:1px solid rgba(255,255,255,0.15)">Order Qty</th>'+
-      '<th style="padding:12px 6px;font-size:12.5px;border-right:1px solid rgba(255,255,255,0.15)">UOM</th>'+
-      '<th style="padding:12px 6px;font-size:12.5px;border-right:1px solid rgba(255,255,255,0.15)">Qty/Case</th>'+
-      '<th style="padding:12px 6px;font-size:12.5px;background:rgba(16,185,129,0.16);color:#34d399;border-right:1px solid rgba(0,0,0,0.1)">Delivered</th>'+
-      '<th style="padding:12px 6px;font-size:12.5px;background:rgba(245,158,11,0.16);color:#fbbf24;border-right:1px solid rgba(0,0,0,0.1)">Loaded &#128666;</th>'+
-      '<th style="padding:12px 6px;font-size:12.5px;background:rgba(220,38,38,0.14);color:#f87171">Pending</th>'+
-    '</tr></thead><tbody>'+rows+'</tbody></table></div>';
+      '<th style="padding:11px 4px;font-size:12px;text-align:center">#</th>'+
+      '<th style="padding:11px 8px;text-align:left;font-size:12px">Item</th>'+
+      '<th style="padding:11px 2px;font-size:12px">Cases</th>'+
+      '<th style="padding:11px 2px;font-size:12px">Qty/Case</th>'+
+      '<th style="padding:11px 2px;font-size:12px">Order Qty</th>'+
+      '<th style="padding:11px 3px;font-size:12px">UOM</th>'+
+      '<th style="padding:11px 3px;font-size:12px;background:rgba(16,185,129,0.16);color:#34d399">Delivered</th>'+
+      '<th style="padding:11px 2px;font-size:12px;background:rgba(245,158,11,0.16);color:#fbbf24">Loaded &#128666;</th>'+
+      '<th style="padding:11px 4px;font-size:12px;background:rgba(220,38,38,0.14);color:#f87171">Pending</th>'+
+    '</tr></thead><tbody id="lm-body">'+buildLoadingRowsHtml()+'</tbody></table></div>';
 }
 
 // A minimal bill snapshot (current in-edit items + the saved bill's other fields) used
@@ -1480,9 +1553,12 @@ window.updateLoadedInEditMode=function(i,val){
   if(!billItems[i])return;
   var item=billItems[i];
   item.qtyLoaded=parseFloat(val)||0;
-  var pending=Math.max(0,(Number(item.totalQty)||0)-(Number(item.qtyDelivered)||0)-item.qtyLoaded);
+  var st=loadStatus(item);
   var cell=document.getElementById('lm-pend-'+i);
-  if(cell){cell.textContent=fmtNum(pending);cell.style.color=pending>0?'var(--red-text)':'var(--green-text)';}
+  if(cell){cell.textContent=st.text;cell.style.color=st.color;}
+  var inp=document.getElementById('lm-in-'+i);
+  if(inp){inp.style.color=st.color;inp.style.borderColor=st.color;}
+  item.qtyPending=Math.max(0,(Number(item.totalQty)||0)-(Number(item.qtyDelivered)||0)-item.qtyLoaded);
   saveAll();
   clearTimeout(window._lmAutosaveTimer);
   window._lmAutosaveTimer=setTimeout(function(){ apiCall('saveBill',{bill:buildFlushBillForLoading()},function(){}); },800);
@@ -1738,7 +1814,9 @@ function onBillItemsChanged() {
 
   // Auto-save to local bills list and localStorage
   var idx = bills.findIndex(function(b) { return String(b._id) === String(draftBill._id); });
-  if (idx >= 0) bills[idx] = draftBill;
+  // keep what the cloud tracks separately (loading session, order status, PDF link) — replacing the
+  // whole object would drop "loadingActive" and kick the screen out of an ongoing loading session
+  if (idx >= 0) bills[idx] = Object.assign({}, bills[idx], draftBill);
   else bills.unshift(draftBill);
 
   saveAll();
@@ -1791,6 +1869,13 @@ function addBillItem(){
     qtyLoaded:   0,
     qtyPending:  totalQty
   });
+  // Added while a loading session is running: it joins the main estimate AND this sub estimate
+  // (everything ordered here goes out now — change "Loaded" if only part of it did).
+  var _eb=currentEditingBill();
+  if(_eb&&_eb.loadingActive){
+    var _ni=billItems[billItems.length-1];
+    _ni.qtyLoaded=totalQty; _ni.qtyPending=0;
+  }
   selectedProduct=null;
   billItemSearch='';
   onBillItemsChanged();
@@ -2366,16 +2451,15 @@ function buildBillPreviewRows(bill, filterQ){
     var i=items.indexOf(item);
     var loaded=item.qtyLoaded!=null?item.qtyLoaded:0;
     var delivered=item.qtyDelivered||0;
-    var pending=Math.max(0,(Number(item.totalQty)||0)-delivered-loaded);
-    var pendColor=pending>0?'var(--red-text)':'var(--green-text)';
+    var st=loadStatus(item);
     var priceStyle=item.sellingPrice?'':' style="color:var(--red-text);font-weight:700"';
     var amtStyle=item.totalAmount?'':' style="color:var(--red-text);font-weight:700"';
     return '<tr><td>'+(i+1)+'</td><td style="font-weight:700;font-size:14px">'+esc(item.productName)+'</td>'+
       '<td>'+(item.cases||'—')+'</td><td><strong>'+item.totalQty+'</strong></td>'+
       '<td>'+esc(item.uom)+'</td><td'+priceStyle+'>&#8377;'+item.sellingPrice+'</td><td class="num"'+amtStyle+'>'+fmtMoney(item.totalAmount)+'</td>'+
       '<td style="text-align:center;font-weight:700;color:var(--green-text)">'+fmtNum(delivered)+'</td>'+
-      '<td style="text-align:center;font-weight:700;color:var(--text-muted)">'+fmtNum(loaded)+(loaded?' &#128274;':'')+'</td>'+
-      '<td style="text-align:center;font-weight:800;color:'+pendColor+'">'+fmtNum(pending)+'</td></tr>';
+      '<td style="text-align:center;font-weight:700;color:'+(loaded?st.color:'var(--text-muted)')+'">'+fmtNum(loaded)+(loaded?' &#128274;':'')+'</td>'+
+      '<td style="text-align:center;font-weight:800;color:'+st.color+'">'+st.text+'</td></tr>';
   }).join('');
   var countNote=q?'<div style="font-size:13.5px;color:var(--text-muted);margin-bottom:8px">Showing '+visible.length+' of '+items.length+' items</div>':'';
   var noMatch='<div class="empty" style="padding:16px"><div class="empty-txt">No items match "'+esc(filterQ)+'"</div></div>';
@@ -2423,13 +2507,13 @@ window.endLoadingUi=function(billId){
   if(!billSnapshot){toast('Estimate not found','err');return;}
   var nothingLoaded=(billSnapshot.items||[]).every(function(it){return !(Number(it.qtyLoaded)||0);});
   if(!confirm(nothingLoaded
-    ?'Nothing is marked as Loaded yet. End the loading session without creating a delivery challan?'
-    :'End loading and generate the delivery challan for whatever is currently marked as Loaded?'))return;
+    ?'Nothing is marked as Loaded yet. End the loading session without creating a sub estimate?'
+    :'End loading and create the sub estimate for whatever is currently marked as Loaded?'))return;
   // Flush whatever was just typed before committing — the per-keystroke autosave is
   // debounced, so without this the server could still see the previous round's numbers.
   clearTimeout(window._lmAutosaveTimer);
   clearTimeout(window._bpAutosaveTimer);
-  toast(nothingLoaded?'Ending loading session...':'Saving and generating delivery challan...','info');
+  toast(nothingLoaded?'Ending loading session...':'Saving and creating the sub estimate...','info');
   apiCall('saveBill',{bill:billSnapshot},function(saveRes){
     if(!saveRes||saveRes.status!=='success'){
       toast('Could not save the loaded quantities: '+((saveRes&&saveRes.message)||'unknown error'),'err');
@@ -2444,7 +2528,7 @@ window.endLoadingUi=function(billId){
       if(editingHere){ billItems=freshBill.items; renderBilling(); }
       if(!challan){
         // Nothing was loaded this round — unlocked, but no blank challan was recorded.
-        toast('Loading session ended — nothing was loaded, so no delivery challan was created.','info');
+        toast('Loading session ended — nothing was loaded, so no sub estimate was created.','info');
         if(window._bpBill&&window._bpBill._id===billId) showBillPreview(freshBill);
         return;
       }
@@ -2455,7 +2539,7 @@ window.endLoadingUi=function(billId){
       });
       toast(challan.orderStatus==='closed'
         ?'🎉 Delivery logged — order fully closed!'
-        :'&#9989; Delivery challan generated. '+fmtNum(challan.totalQtyPending)+' units still pending.','ok');
+        :'&#9989; Sub estimate '+challanLabel(freshBill.billNumber,challan.seq)+' created. '+fmtNum(challan.totalQtyPending)+' units still pending.','ok');
     });
   });
 };
@@ -2471,37 +2555,68 @@ function challanLabel(billNumber,seq){
 // customer/estimate meta, item table with Price/Amount and a grand total, exactly
 // like the main estimate, plus an authorised-signatory footer.
 function buildDeliveryChallanHTML(bill,challan){
-  var grand=0;
+  var grand=0, grandCases=0;
+  // Rows: # (the item's own serial number on the MAIN estimate, so both can be cross-checked)
+  // | ITEM | CASES | QTY/CASE | QTY LOADED | UOM | PRICE | AMOUNT. No pending, no loose pieces.
   var rows=(challan.items||[]).map(function(it,i){
-    var amt=it.amountThisRound!=null?Number(it.amountThisRound):(Number(it.loadedThisRound)||0)*(Number(it.sellingPrice)||0);
-    grand+=amt;
+    var bidx=(bill.items||[]).findIndex(function(x){
+      return it.productId?String(x.productId)===String(it.productId):String(x.productName||'').toLowerCase()===String(it.productName||'').toLowerCase();
+    });
+    var bi=bidx>=0?bill.items[bidx]:{};
+    var loaded=Number(it.loadedThisRound)||0;
+    var qpc=Number(it.qtyPerCase)||Number(bi.qtyPerCase)||0;
+    var price=it.sellingPrice!=null?Number(it.sellingPrice):(Number(bi.sellingPrice)||0);
+    var amt=it.amountThisRound!=null?Number(it.amountThisRound):loaded*price;
+    var cases=qpc>0?Math.round(loaded/qpc*100)/100:0;
+    grand+=amt; grandCases+=cases;
     return '<tr style="background:'+(i%2?'#fefcfc':'#fff')+'">'+
-      '<td>'+(i+1)+'</td><td><strong>'+esc(it.productName)+'</strong></td>'+
-      '<td>'+fmtNum(it.casesThisRound)+'</td><td>'+fmtNum(it.looseThisRound)+'</td>'+
-      '<td style="font-weight:700;text-align:center">'+fmtNum(it.loadedThisRound)+'</td>'+
-      '<td>'+esc(it.uom||'')+'</td>'+
-      '<td>&#8377;'+fmtNum(it.sellingPrice||0)+'</td>'+
-      '<td style="font-weight:700;text-align:right">'+fmtMoney(amt)+'</td>'+
-      '<td style="text-align:center;font-weight:700;color:'+(it.pendingAfter>0?'#dc2626':'#16a34a')+'">'+fmtNum(it.pendingAfter)+'</td></tr>';
+      '<td>'+(bidx>=0?bidx+1:i+1)+'</td><td><strong>'+esc(it.productName)+'</strong></td>'+
+      '<td>'+(cases?fmtNum(cases):'—')+'</td><td>'+(qpc>0?fmtNum(qpc):'—')+'</td>'+
+      '<td><strong>'+fmtNum(loaded)+'</strong></td><td>'+esc(it.uom||bi.uom||'')+'</td>'+
+      '<td>&#8377;'+price+'</td>'+
+      '<td style="font-weight:700;text-align:right">&#8377;'+Number(amt).toLocaleString('en-IN',{minimumFractionDigits:2})+'</td></tr>';
   }).join('');
   return '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;padding:20px;color:#000}.hdr{background:#dc2626;color:#fff;padding:14px;text-align:center;border-radius:8px 8px 0 0;margin-bottom:10px}.hdr h1{font-size:22px;margin-bottom:2px}.hdr p{font-size:11px}.hdr .doc-tag{margin-top:6px;font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase}.meta{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:12px}.mb{background:#fef2f2;border:1px solid #fca5a5;padding:8px;border-radius:6px}.mb label{display:block;font-size:9px;font-weight:700;color:#7f1d1d;text-transform:uppercase}.mb span{font-size:13px;font-weight:700}table{width:100%;border-collapse:collapse}th{background:#dc2626;color:#fff;padding:7px 6px;text-align:left;font-size:11px}td{padding:5px 6px;border-bottom:1px solid #f3f4f6;font-size:11px}.tot{background:#fef9c3;font-weight:700;font-size:13px}.ftr{margin-top:16px;border-top:1px solid #ccc;padding-top:10px;display:flex;justify-content:space-between}@media print{body{padding:0}}</style></head><body>'+
-    '<div class="hdr"><h1>GLT FIREWORKS</h1><p>Gollagunta | Wholesale &amp; Retail Fireworks</p><p style="margin-top:4px;font-size:12px;font-weight:700">Contact: Sai Reddy, 9440116712</p><p class="doc-tag">Delivery Challan</p></div>'+
+    '<div class="hdr"><h1>GLT FIREWORKS</h1><p>Gollagunta | Wholesale &amp; Retail Fireworks</p><p style="margin-top:4px;font-size:12px;font-weight:700">Contact: Sai Reddy, 9440116712</p><p class="doc-tag">Sub Estimate</p></div>'+
     '<div class="meta">'+
       '<div class="mb"><label>Customer</label><span>'+esc(bill.customerName||'')+'</span></div>'+
       '<div class="mb"><label>Estimate Number</label><span>#'+esc(bill.billNumber)+'</span></div>'+
-      '<div class="mb"><label>Challan No.</label><span>#'+esc(challanLabel(bill.billNumber,challan.seq))+'</span></div>'+
-      '<div class="mb"><label>Date</label><span>'+todayDisp()+'</span></div>'+
+      '<div class="mb"><label>Sub Estimate No.</label><span>#'+esc(challanLabel(bill.billNumber,challan.seq))+'</span></div>'+
+      '<div class="mb"><label>Date</label><span>'+(challan.createdAt?fmtDateDMY(challan.createdAt):todayDisp())+'</span></div>'+
     '</div>'+
-    '<table><thead><tr><th>#</th><th>ITEM</th><th>CASES</th><th>LOOSE</th><th>QTY LOADED</th><th>UOM</th><th>PRICE</th><th>AMOUNT</th><th>PENDING</th></tr></thead>'+
-    '<tbody>'+rows+'<tr class="tot"><td colspan="6"></td><td>TOTAL</td><td style="text-align:right">&#8377;'+Number(grand).toLocaleString('en-IN',{minimumFractionDigits:2})+'</td><td></td></tr></tbody></table>'+
+    '<table><thead><tr><th>#</th><th>ITEM</th><th>CASES</th><th>QTY/CASE</th><th>QTY LOADED</th><th>UOM</th><th>PRICE</th><th>AMOUNT</th></tr></thead>'+
+    '<tbody>'+rows+'<tr class="tot"><td colspan="4">Cases: '+fmtNum(grandCases)+'</td><td colspan="3">GRAND TOTAL</td><td style="text-align:right">&#8377;'+Number(grand).toLocaleString('en-IN',{minimumFractionDigits:2})+'</td></tr></tbody></table>'+
     '<div class="ftr"><div><strong>GLT FIREWORKS, GOLLAGUNTA</strong><br><small>Thank you! &#128150;</small></div><div style="text-align:right"><p>Authorized Signature</p><div style="border-top:1px solid #000;width:140px;margin-top:24px;padding-top:4px">___________________</div></div></div>'+
     '</body></html>';
 }
 
-window.shareChallanWhatsApp=function(url,customerName,billNumber,seq){
-  if(!url){toast('The PDF is not ready yet — try again in a moment.','err');return;}
+// Sub estimate PDFs are rebuilt from the saved record with the CURRENT template whenever the
+// stored file is from an older layout (file names carry "_v2"), so an old PDF never lingers.
+window._tlCh={};
+function subEstimateUrl(billId,chId,cb){
+  var c=window._tlCh[chId], bill=bills.find(function(b){return b._id===billId;});
+  if(!c||!bill){ cb(null); return; }
+  if(c.pdfUrl&&/_v2\.pdf/.test(c.pdfUrl)){ cb(c.pdfUrl); return; }
+  toast('Preparing the sub estimate PDF...','info');
+  apiSaveChallanPdf(c.id,billId,bill.customerName,c.seq,buildDeliveryChallanHTML(bill,c),function(res){
+    if(res&&res.fileUrl){ c.pdfUrl=res.fileUrl; cb(res.fileUrl); }
+    else { toast('Could not prepare the PDF — check the connection and try again.','err'); cb(null); }
+  });
+}
+window.viewSubEstimate=function(billId,chId){
+  var w=null; try{ w=window.open('','_blank'); }catch(e){}
+  subEstimateUrl(billId,chId,function(url){
+    if(!url){ if(w&&!w.closed) w.close(); return; }
+    if(w&&!w.closed) w.location.href=url; else window.open(url,'_blank');
+  });
+};
+window.shareSubEstimate=function(billId,chId){
   var wa=waOpener();
-  wa.send('Delivery Challan #'+challanLabel(billNumber,seq)+' — '+customerName+'\nView / Download PDF:\n'+url);
+  var bill=bills.find(function(b){return b._id===billId;}), c=window._tlCh[chId];
+  subEstimateUrl(billId,chId,function(url){
+    if(!url||!bill||!c){ wa.cancel(); return; }
+    wa.send('Sub Estimate #'+challanLabel(bill.billNumber,c.seq)+' — '+bill.customerName+'\nView / Download PDF:\n'+url);
+  });
 };
 
 function buildDeliveryTimelineHtml(bill,challans){
@@ -2514,25 +2629,19 @@ function buildDeliveryTimelineHtml(bill,challans){
     active:true
   }];
   challans.slice().reverse().forEach(function(c){
-    var itemLines=(c.items||[]).map(function(it){
-      return esc(it.productName)+': <strong>'+fmtNum(it.loadedThisRound)+' '+esc(it.uom||'')+'</strong>'+
-        (it.casesThisRound?' ('+fmtNum(it.casesThisRound)+' cs + '+fmtNum(it.looseThisRound)+')':'')+
-        (it.amountThisRound?' — '+fmtMoney(it.amountThisRound):'');
-    }).join('<br>');
-    var custJs=esc(bill.customerName).replace(/'/g,"\\'");
-    var urlJs=esc(c.pdfUrl||'').replace(/'/g,"\\'");
+    // The item list of each sub estimate lives in its PDF (View) — not repeated here.
+    window._tlCh[c.id]=c;
     var billIdJs=esc(bill._id).replace(/'/g,"\\'");
     var chIdJs=esc(c.id).replace(/'/g,"\\'");
     var actions='<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">'+
-      (c.pdfUrl?'<button class="btn btn-b btn-sm" onclick="window.open(\''+urlJs+'\',\'_blank\')">&#128424; View Challan</button>'+
-        '<button class="btn btn-sm" style="background:#25D366;color:#fff" onclick="shareChallanWhatsApp(\''+urlJs+'\',\''+custJs+'\',\''+esc(bill.billNumber)+'\','+c.seq+')">&#128241; WhatsApp</button>'
-        :'<span style="color:var(--text-muted);font-size:12.5px;align-self:center">Preparing PDF&hellip;</span>')+
+      '<button class="btn btn-b btn-sm" onclick="viewSubEstimate(\''+billIdJs+'\',\''+chIdJs+'\')">&#128424; View</button>'+
+      '<button class="btn btn-sm" style="background:#25D366;color:#fff" onclick="shareSubEstimate(\''+billIdJs+'\',\''+chIdJs+'\')">&#128241; WhatsApp</button>'+
       (isAdmin?'<button class="btn btn-o btn-sm" onclick="editChallanUi(\''+billIdJs+'\',\''+chIdJs+'\')">&#9999; Edit</button>':'')+
       '</div>';
     nodes.push({
-      title:'Estimate '+challanLabel(bill.billNumber,c.seq)+' — '+fmtNum(c.totalQtyLoaded)+' units loaded'+(c.totalAmountLoaded?' ('+fmtMoney(c.totalAmountLoaded)+')':''),
+      title:'Sub Estimate '+challanLabel(bill.billNumber,c.seq)+' — '+fmtNum(c.totalQtyLoaded)+' units loaded'+(c.totalAmountLoaded?' ('+fmtMoney(c.totalAmountLoaded)+')':''),
       time: fmtAuditTime(c.createdAt),
-      detail: itemLines+'<div style="margin-top:4px;color:var(--text-muted);font-size:12.5px">by '+esc(c.createdBy||'unknown')+' &middot; whole-estimate pending after this round: '+fmtNum(c.totalQtyPending)+'</div>'+actions
+      detail: '<div style="color:var(--text-muted);font-size:12.5px">by '+esc(c.createdBy||'unknown')+'</div>'+actions
     });
   });
   nodes.push({title:'Estimate Created', time: esc(bill.displayDate||''), detail:'Estimate #'+esc(bill.billNumber)+' prepared for '+esc(bill.customerName)+'.'});
@@ -2551,52 +2660,209 @@ function buildDeliveryTimelineHtml(bill,challans){
 // of one already-recorded round. Saving recalculates that round's own totals AND
 // folds the difference into the estimate's running Delivered/Pending — same numbers
 // everywhere (estimate, Pending Loads, the timeline) update together.
+// The modal behaves like an ongoing loading session for that sub estimate: every item of
+// the estimate is listed (searchable, not just the ones already in it) so more can be added
+// to this load, and a product that isn't on the estimate yet can be added too — it joins
+// the main estimate (ordered qty = the qty added here) and this sub estimate together.
+function ecKey(x){ return x.productId ? String(x.productId) : 'name:'+String(x.productName||'').toLowerCase(); }
+
 window.editChallanUi=function(billId,challanId){
   var bill=bills.find(function(b){return b._id===billId;});
   if(!bill){toast('Estimate not found','err');return;}
   apiGetBillChallans(billId,function(challans){
     var challan=(challans||[]).find(function(c){return c.id===challanId;});
-    if(!challan){toast('Delivery challan not found','err');return;}
-    window._ecChallan=challan; window._ecBill=bill;
-    var rows=(challan.items||[]).map(function(it,i){
-      return '<div class="fg" style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'+
-        '<div style="flex:1;font-size:14px;font-weight:600">'+esc(it.productName)+' <span style="color:var(--text-muted);font-size:12.5px">('+esc(it.uom||'')+')</span></div>'+
-        '<input type="number" min="0" id="ec-qty-'+i+'" value="'+(it.loadedThisRound||0)+'" style="width:90px;padding:8px;border-radius:8px;text-align:center;font-weight:700;background:var(--input-bg);border:1px solid var(--input-border)">'+
-      '</div>';
-    }).join('');
-    showModal('<div class="modal" style="max-width:520px">'+
-      '<div class="modal-hdr"><span class="modal-title">&#9999; Edit Estimate '+esc(challanLabel(bill.billNumber,challan.seq))+'</span><button class="modal-x" onclick="closeModal()">&#10005;</button></div>'+
+    if(!challan){toast('Sub estimate not found','err');return;}
+    var inRound={};
+    (challan.items||[]).forEach(function(it){ inRound[ecKey(it)]=Number(it.loadedThisRound)||0; });
+    var rows=(bill.items||[]).map(function(it,i){
+      var q=inRound[ecKey(it)]||0;
+      var cs=Number(it.cases)||0, qp=Number(it.qtyPerCase)||0, tq=Number(it.totalQty)||0;
+      return {serial:i+1, productId:it.productId||null, productName:it.productName, uom:it.uom||'',
+              cases:cs, qpc:qp, totalQty:tq, o:{cases:cs,qpc:qp,totalQty:tq},
+              otherDelivered:Math.max(0,(Number(it.qtyDelivered)||0)-q), qty:q, isNew:false};
+    });
+    window._ec={bill:bill, challan:challan, rows:rows, search:''};
+    showModal('<div class="modal" style="max-width:1000px">'+
+      '<div class="modal-hdr"><span class="modal-title">&#9999; Edit Sub Estimate '+esc(challanLabel(bill.billNumber,challan.seq))+'</span><button class="modal-x" onclick="closeModal()">&#10005;</button></div>'+
       '<div class="modal-body">'+
-        '<p style="font-size:13.5px;color:var(--text-muted);margin-bottom:14px">Correct how much was actually loaded in this round. The estimate\'s Delivered and Pending totals will be recalculated automatically.</p>'+
-        rows+
+        '<p style="font-size:13.5px;color:var(--text-muted);margin-bottom:12px">Same as the loading screen: set how much of each item went out in this sub estimate (including items not in it before), and correct cases / qty per case / order qty if needed. Qty per case here changes this estimate only — never the product list.</p>'+
+        '<div class="fg" style="margin-bottom:10px"><div class="srch-wrap"><span class="srch-ico">&#128269;</span><input class="srch-inp" id="ec-search" placeholder="Search items..." autocomplete="off" oninput="ecSearch(this.value)"></div></div>'+
+        '<div id="ec-rows"></div>'+
+        '<div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--card-border)">'+
+          '<div class="lbl" style="margin-bottom:6px">Add a product that is not on this estimate</div>'+
+          '<div class="srch-wrap" style="position:relative"><span class="srch-ico">&#10010;</span><input class="srch-inp" id="ec-add" placeholder="Type a code or name to add..." autocomplete="off" oninput="ecAddSearch(this.value)">'+
+          '<div class="ddl" id="ec-add-ddl" style="position:absolute;left:0;right:0;top:100%;max-height:220px;overflow:auto;z-index:20"></div></div>'+
+        '</div>'+
       '</div>'+
       '<div class="modal-ftr"><button class="btn btn-gh" onclick="closeModal()">Cancel</button><button class="btn btn-r" onclick="saveEditedChallan()">&#128190; Save</button></div>'+
     '</div>');
+    ecPaint();
   });
 };
 
-window.saveEditedChallan=function(){
-  var challan=window._ecChallan, bill=window._ecBill;
-  if(!challan||!bill)return;
-  var items=(challan.items||[]).map(function(it,i){
-    var el=document.getElementById('ec-qty-'+i);
-    return {productId:it.productId||null, productName:it.productName, loadedThisRound: el?(parseFloat(el.value)||0):(it.loadedThisRound||0)};
+function ecStatus(r){ return loadStatus({totalQty:r.totalQty, qtyDelivered:r.otherDelivered, qtyLoaded:r.qty}); }
+
+function ecPaint(){
+  var s=window._ec; if(!s)return;
+  var q=(s.search||'').trim().toLowerCase();
+  var box='width:58px;padding:6px 3px;border-radius:7px;font-size:13.5px;font-weight:700;text-align:center;background:var(--input-bg);border:1px solid var(--input-border);color:var(--text-main)';
+  var body=s.rows.map(function(r,i){
+    if(q && String(r.productName||'').toLowerCase().indexOf(q)<0) return '';
+    var st=ecStatus(r);
+    var oq=r.isNew
+      ?'<span style="display:inline-block;min-width:44px;font-weight:700">'+fmtNum(r.totalQty)+'</span>'
+      :'<input type="number" min="0" id="ec-oq-'+i+'" value="'+(r.totalQty||'')+'" placeholder="—" style="'+box+'" oninput="ecEdit('+i+',\'qty\',this.value)">';
+    return '<tr style="border-bottom:1px solid var(--card-border)">'+
+      '<td style="padding:8px 4px;text-align:center;color:var(--text-muted);font-size:13px">'+r.serial+'</td>'+
+      '<td style="padding:8px 8px;text-align:left;font-weight:700;font-size:13.5px">'+(r.isNew?'<span class="tag" style="margin-right:6px;background:#16a34a22;color:#16a34a;font-weight:800">NEW</span>':'')+esc(r.productName)+'</td>'+
+      '<td style="padding:6px 2px;text-align:center"><input type="number" min="0" step="0.5" id="ec-cs-'+i+'" value="'+(r.cases||'')+'" placeholder="—" style="'+box+'" oninput="ecEdit('+i+',\'cases\',this.value)"></td>'+
+      '<td style="padding:6px 2px;text-align:center"><input type="number" min="0" id="ec-qp-'+i+'" value="'+(r.qpc||'')+'" placeholder="—" style="'+box+'" oninput="ecEdit('+i+',\'qpc\',this.value)"></td>'+
+      '<td style="padding:6px 2px;text-align:center">'+oq+'</td>'+
+      '<td style="padding:8px 3px;text-align:center;font-size:12.5px">'+esc(r.uom)+'</td>'+
+      '<td style="padding:8px 3px;text-align:center;font-weight:700;color:var(--green-text)" title="Loaded in the other sub estimates">'+fmtNum(r.otherDelivered)+'</td>'+
+      '<td style="padding:6px 2px;text-align:center"><input type="number" min="0" id="ec-in-'+i+'" value="'+(r.qty||'')+'" placeholder="0" style="width:66px;padding:6px 3px;border-radius:8px;font-size:14px;font-weight:700;text-align:center;background:var(--input-bg);border:1.5px solid '+st.color+';color:'+st.color+'" oninput="ecEdit('+i+',\'loaded\',this.value)"></td>'+
+      '<td id="ec-pend-'+i+'" style="padding:8px 4px;text-align:center;font-weight:800;color:'+st.color+'">'+st.text+'</td>'+
+    '</tr>';
+  }).join('');
+  var box2=document.getElementById('ec-rows');
+  if(!box2)return;
+  box2.innerHTML='<div class="tbl-wrap" style="border-radius:12px;overflow-x:auto"><table style="width:100%;border-collapse:collapse"><thead><tr>'+
+    '<th style="padding:11px 4px;font-size:12px">#</th><th style="padding:11px 8px;text-align:left;font-size:12px">Item</th>'+
+    '<th style="padding:11px 2px;font-size:12px">Cases</th><th style="padding:11px 2px;font-size:12px">Qty/Case</th><th style="padding:11px 2px;font-size:12px">Order Qty</th><th style="padding:11px 3px;font-size:12px">UOM</th>'+
+    '<th style="padding:11px 3px;font-size:12px;background:rgba(16,185,129,0.16);color:#34d399">Other loads</th>'+
+    '<th style="padding:11px 2px;font-size:12px;background:rgba(245,158,11,0.16);color:#fbbf24">Loaded &#128666;</th>'+
+    '<th style="padding:11px 4px;font-size:12px;background:rgba(220,38,38,0.14);color:#f87171">Pending</th></tr></thead><tbody>'+
+    (body||'<tr><td colspan="9" style="padding:16px;text-align:center;color:var(--text-muted)">No items match.</td></tr>')+'</tbody></table></div>';
+}
+window.ecSearch=function(v){ if(window._ec){ window._ec.search=v; ecPaint(); } };
+
+window.ecEdit=function(i,field,val){
+  var s=window._ec; if(!s||!s.rows[i])return;
+  var r=s.rows[i], v=parseFloat(val); if(isNaN(v)||v<0) v=0;
+  if(r.isNew){
+    if(field==='cases'){ r.cases=v; if(r.qpc>0) r.qty=Math.round(v*r.qpc); }
+    else if(field==='qpc'){ r.qpc=v; if(v>0&&r.cases>0) r.qty=Math.round(r.cases*v); }
+    else { r.qty=v; if(r.qpc>0) r.cases=Math.floor(v/r.qpc); }
+    r.totalQty=r.qty;   // a product added here is ordered exactly as much as goes out now
+  } else if(field==='cases'){ r.cases=v; if(r.qpc>0) r.totalQty=Math.round(v*r.qpc); }
+  else if(field==='qpc'){ r.qpc=v; if(v>0&&r.cases>0) r.totalQty=Math.round(r.cases*v); }
+  else if(field==='qty'){ r.totalQty=v; if(r.qpc>0) r.cases=Math.floor(v/r.qpc); }
+  else r.qty=v;
+  var ids={cases:['ec-cs-',r.cases],qpc:['ec-qp-',r.qpc],qty:['ec-oq-',r.totalQty],loaded:['ec-in-',r.qty]};
+  Object.keys(ids).forEach(function(f){
+    if(f===field) return;
+    var el=document.getElementById(ids[f][0]+i); if(el&&el.tagName==='INPUT') el.value=ids[f][1]||'';
   });
-  toast('Saving corrected delivery...','info');
-  apiEditDeliveryChallan(challan.id,items,function(res){
-    if(!res||res.status!=='success'){toast('Could not save: '+((res&&res.message)||'unknown error'),'err');return;}
-    var idx=bills.findIndex(function(b){return b._id===bill._id;});
-    if(idx>=0){ bills[idx]=Object.assign({},bills[idx],res.bill); saveAll(); }
-    var freshBill=idx>=0?bills[idx]:res.bill;
-    var freshChallan=res.challan;
-    closeModal();
-    toast('&#9989; Delivery challan updated.','ok');
-    if(freshChallan&&freshChallan.items&&freshChallan.items.length){
-      var html=buildDeliveryChallanHTML(freshBill,freshChallan);
-      apiSaveChallanPdf(freshChallan.id,bill._id,freshBill.customerName,freshChallan.seq,html,function(){});
+  var st=ecStatus(r);
+  var pc=document.getElementById('ec-pend-'+i); if(pc){pc.textContent=st.text;pc.style.color=st.color;}
+  var li=document.getElementById('ec-in-'+i); if(li){li.style.color=st.color;li.style.borderColor=st.color;}
+};
+
+window.ecAddSearch=function(q){
+  var d=document.getElementById('ec-add-ddl'); if(!d)return;
+  q=String(q||'').trim();
+  if(q.length<2){ d.classList.remove('open'); d.innerHTML=''; return; }
+  var s=window._ec;
+  var res=searchProducts(q,8).filter(function(p){
+    return !s.rows.some(function(r){ return r.productId?String(r.productId)===String(p._id):String(r.productName).toLowerCase()===String(p.name).toLowerCase(); });
+  });
+  d.innerHTML=res.length?res.map(function(p){
+    return '<div class="ddi" onmousedown="ecAddProduct(\''+encodeURIComponent(String(p._id))+'\')"><div class="mt">'+codeBadge(prodCode(p))+esc(p.name)+'</div><div class="st">'+esc(p.uom)+(p.qtyPerCase?' &middot; '+p.qtyPerCase+'/case':'')+'</div></div>';
+  }).join(''):'<div class="ddi" style="color:var(--text-muted)">No other product matches "'+esc(q)+'"</div>';
+  d.classList.add('open');
+};
+window.ecAddProduct=function(encId){
+  var s=window._ec; if(!s)return;
+  var p=products.find(function(x){return String(x._id)===decodeURIComponent(encId);});
+  if(!p)return;
+  if(s.rows.some(function(r){ return r.productId?String(r.productId)===String(p._id):String(r.productName).toLowerCase()===String(p.name).toLowerCase(); })){
+    toast('That product is already in the list — just set its quantity.','info'); return;
+  }
+  s.rows.push({serial:s.rows.length+1, productId:p._id, productName:p.name, uom:p.uom||'BOX', cases:0, qpc:Number(p.qtyPerCase)||0,
+               totalQty:0, o:null, otherDelivered:0, qty:0, isNew:true, product:p});
+  var a=document.getElementById('ec-add'); if(a) a.value='';
+  var d=document.getElementById('ec-add-ddl'); if(d){ d.classList.remove('open'); d.innerHTML=''; }
+  s.search=''; var se=document.getElementById('ec-search'); if(se) se.value='';
+  ecPaint();
+  var last=document.getElementById('ec-in-'+(s.rows.length-1)); if(last){ last.scrollIntoView({block:'nearest'}); last.focus(); }
+};
+
+// Takes stock off the shelf (or puts it back, for a negative amount) when order quantities
+// change here — same cases/loose recalculation the normal estimate save does.
+function adjustStock(list){
+  var changed=[];
+  list.forEach(function(x){
+    if(!x.delta) return;
+    var idx=products.findIndex(function(p){ return String(p._id)===String(x.productId); });
+    if(idx<0) return;
+    var p=products[idx], qpc=p.qtyPerCase||0, ns=(p.stock||0)-x.delta, nc, nl;
+    if(qpc>0){ var a=Math.abs(ns), sg=ns<0?-1:1; nc=sg*Math.floor(a/qpc); nl=sg*Math.round(a%qpc); } else { nc=0; nl=ns; }
+    products[idx]=Object.assign({},p,{stock:ns,stockCases:nc,stockLoose:nl});
+    changed.push(products[idx]);
+  });
+  if(changed.length){ saveAll(); if(cloudOn()) apiCall('updateStock',{products:changed},function(){}); }
+}
+
+window.saveEditedChallan=function(){
+  var s=window._ec; if(!s)return;
+  var bill=s.bill, challan=s.challan;
+  var newRows=s.rows.filter(function(r){ return r.isNew && r.qty>0; });
+  var editedRows=s.rows.filter(function(r){ return !r.isNew && (r.cases!==r.o.cases||r.qpc!==r.o.qpc||r.totalQty!==r.o.totalQty); });
+  var items=s.rows.filter(function(r){ return !r.isNew || r.qty>0; }).map(function(r){
+    return {productId:r.productId||null, productName:r.productName, loadedThisRound:r.qty||0};
+  });
+  function finish(){
+    apiEditDeliveryChallan(challan.id,items,function(res){
+      if(!res||res.status!=='success'){toast('Could not save: '+((res&&res.message)||'unknown error'),'err');return;}
+      var idx=bills.findIndex(function(b){return b._id===bill._id;});
+      if(idx>=0){ bills[idx]=Object.assign({},bills[idx],res.bill); saveAll(); }
+      var freshBill=idx>=0?bills[idx]:res.bill;
+      var freshChallan=res.challan;
+      toast('&#9989; Sub estimate '+challanLabel(freshBill.billNumber,freshChallan.seq)+' updated.','ok');
+      if(freshChallan&&freshChallan.items&&freshChallan.items.length){
+        window._tlCh[freshChallan.id]=freshChallan;
+        apiSaveChallanPdf(freshChallan.id,bill._id,freshBill.customerName,freshChallan.seq,buildDeliveryChallanHTML(freshBill,freshChallan),function(pres){
+          if(pres&&pres.fileUrl) freshChallan.pdfUrl=pres.fileUrl;
+        });
+      }
+      window._ec=null;
+      showBillPreview(freshBill);
+      if(window._editingOriginalId===bill._id){ billItems=freshBill.items; }
+    });
+  }
+  toast('Saving sub estimate...','info');
+  if(!newRows.length&&!editedRows.length){ finish(); return; }
+  // Order-quantity corrections and brand-new products go into the MAIN estimate first
+  var ref=bill.referenceNumber||'1', stock=[];
+  var base=(bill.items||[]).map(function(it,i){
+    var r=s.rows[i];
+    if(r&&!r.isNew&&(r.cases!==r.o.cases||r.qpc!==r.o.qpc||r.totalQty!==r.o.totalQty)){
+      stock.push({productId:it.productId,delta:r.totalQty-r.o.totalQty});
+      return Object.assign({},it,{cases:r.cases,qtyPerCase:r.qpc,totalQty:r.totalQty,totalAmount:r.totalQty*(it.sellingPrice||0),
+        qtyPending:Math.max(0,r.totalQty-(Number(it.qtyDelivered)||0)-(Number(it.qtyLoaded)||0))});
     }
-    if(window._bpBill&&window._bpBill._id===bill._id) showBillPreview(freshBill);
-    if(window._editingOriginalId===bill._id){ billItems=freshBill.items; renderBilling(); }
+    return it;
+  });
+  var added=newRows.map(function(r){
+    var p=r.product||{}, price=Number(getPrice(p,ref))||0;
+    stock.push({productId:p._id,delta:r.qty});
+    return {productId:p._id, productName:p.name, uom:p.uom||'BOX', cases:r.cases||0, qtyPerCase:r.qpc||0,
+      looseQty:r.qpc>0?0:r.qty, totalQty:r.qty, costPrice:p.costPrice||0, sellingPrice:price, totalAmount:r.qty*price,
+      qtyLoaded:0, qtyDelivered:0, qtyPending:r.qty};
+  });
+  var allItems=base.concat(added);
+  var updated=Object.assign({},bill,{
+    items:allItems,
+    totalAmount:allItems.reduce(function(a,i){return a+(i.totalAmount||0);},0),
+    totalCases:allItems.reduce(function(a,i){return a+(i.cases||0);},0),
+    updatedAt:new Date().toISOString()
+  });
+  apiCall('saveBill',{bill:updated},function(sr){
+    if(!sr||sr.status!=='success'){toast('Could not save the estimate changes: '+((sr&&sr.message)||'unknown error'),'err');return;}
+    var bi=bills.findIndex(function(b){return b._id===bill._id;});
+    if(bi>=0){ bills[bi]=updated; saveAll(); }
+    adjustStock(stock);
+    finish();
   });
 };
 
@@ -2776,7 +3042,8 @@ function shareCustomerStatementWhatsApp(id){
 
 function buildBillHTML(bill){
   var rows=(bill.items||[]).map(function(item,i){
-    var loaded=item.qtyLoaded!=null?item.qtyLoaded:0;
+    // Loaded = everything loaded so far (past sub estimates + the current round)
+    var loaded=(Number(item.qtyDelivered)||0)+(item.qtyLoaded!=null?Number(item.qtyLoaded):0);
     // Same red(over)/blue(under)/green(exact) rule as the on-screen billing table and
     // the View Estimate modal — recomputed from loaded vs. ordered qty so an over-load
     // shows its real amount instead of being clamped to 0.
@@ -5933,6 +6200,14 @@ setInterval(function() {
   window.addEventListener('popstate',function(){
     if(leaving) return;
     if(!armed) return;
+    // Back inside the app first: close an open window, else return to the previous screen
+    var mc=document.getElementById('modal-container');
+    var inApp=document.getElementById('app')&&document.getElementById('app').style.display!=='none'&&document.getElementById('login-page').style.display==='none';
+    if(inApp&&((mc&&mc.innerHTML)||(typeof curTab!=='undefined'&&curTab!=='home'))){
+      try{ history.pushState({glt:'guard'},'',location.href); }catch(e){}
+      goBack();
+      return;
+    }
     var leave=window.confirm('Do you want to leave the app?\n\nOK = leave     Cancel = stay here');
     if(!leave){
       try{ history.pushState({glt:'guard'},'',location.href); }catch(e){}

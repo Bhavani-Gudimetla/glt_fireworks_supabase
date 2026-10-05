@@ -475,15 +475,15 @@ var GLTCloud = (function () {
       case 'saveDeliveryChallanPdf': {
         var chId = String(d.challanId), chBillId = String(d.billId);
         var d1 = new Date(), dc1 = ('0' + d1.getDate()).slice(-2) + ('0' + (d1.getMonth() + 1)).slice(-2) + String(d1.getFullYear()).slice(-2);
-        var chFile = safeName(d.customerName || 'customer') + '_load' + (d.seq || '') + '_' + dc1 + '.pdf';
+        var chFile = safeName(d.customerName || 'customer') + '_sub' + (d.seq || '') + '_' + dc1 + '_v2.pdf';
         return makePdf(d.htmlContent).then(function (blob) {
-          return uploadPdf('bills/' + safeName(chBillId) + '/challans/' + chFile, blob);
+          return uploadPdf('bills/' + safeName(chBillId) + '/sub-estimates/' + chFile, blob);
         }).then(function (url) {
           return rpc('set_challan_pdf', { p_challan_id: chId, p_url: url }).then(function () {
             return { status: 'success', fileUrl: url };
           });
         }).catch(function (err) {
-          return { status: 'success', warning: 'Delivery challan saved, but the PDF link could not be created (' + errText(err) + ').' };
+          return { status: 'success', warning: 'Sub estimate saved, but the PDF link could not be created (' + errText(err) + ').' };
         });
       }
       case 'addUser':
