@@ -460,6 +460,11 @@ function mergeCloudBills(remote) {
     if (!k) return;
     var lb = byKey[k];
     if (!lb) { byKey[k] = rb; order.push(k); changed = true; return; }
+    // The loading session and order status live on the server only: always take its word for them,
+    // whatever the timestamps say, so this device never shows a stale "not loading" state.
+    ['loadingActive','loadingStartedBy','loadingStartedAt','orderStatus'].forEach(function(f){
+      if (rb[f] !== undefined && lb[f] !== rb[f]) { lb[f] = rb[f]; changed = true; }
+    });
     if (busy[k] || pending[k]) return;
     var rt = new Date(rb.updatedAt || rb.date || 0).getTime();
     var lt = new Date(lb.updatedAt || lb.date || 0).getTime();
@@ -2350,7 +2355,12 @@ function saveBill(silent){
 
   if (isEdit) {
     var idx = bills.findIndex(function(b) { return String(b._id) === String(originalId); });
-    if (idx >= 0) bills[idx] = bill;
+    if (idx >= 0) {
+      // keep what the cloud tracks separately (loading session, order status) — a plain replace
+      // would make this device forget a loading session that is still open on the server
+      bill = Object.assign({}, bills[idx], bill);
+      bills[idx] = bill;
+    }
     else bills.unshift(bill);
   } else {
     bills.unshift(bill);
@@ -2643,14 +2653,26 @@ function buildDeliveryTimelineHtml(bill,challans){
     title: closed?'&#9989; Order Closed':'&#128666; Work In Progress',
     time: challans.length?fmtAuditTime(challans[challans.length-1].createdAt):'',
     detail: closed?'Every item on this estimate has been fully delivered.':(fmtNum(billTotalPending(bill))+' units still pending across this estimate.'),
-    active:true
+    state: closed?'done':'status'
   }];
+  // A loading session that was started but not ended: red blinking dot, no PDF / print / share
+  // until End Loading is pressed (that is when the sub estimate is created).
+  if(bill.loadingActive){
+    var nextSeq=challans.reduce(function(m,c){return Math.max(m,Number(c.seq)||0);},0)+1;
+    nodes.push({
+      title:'Sub Estimate '+challanLabel(bill.billNumber,nextSeq)+' — loading in progress',
+      time: bill.loadingStartedAt?fmtAuditTime(bill.loadingStartedAt):'',
+      detail:'<div style="color:var(--text-muted);font-size:12.5px">started by '+esc(bill.loadingStartedBy||'someone')+'. Open <b>Edit Estimate</b> to continue — the sub estimate PDF is created only when loading is ended.</div>',
+      state:'live'
+    });
+  }
   challans.slice().reverse().forEach(function(c){
     // The item list of each sub estimate lives in its PDF (View) — not repeated here.
     window._tlCh[c.id]=c;
     var billIdJs=esc(bill._id).replace(/'/g,"\\'");
     var chIdJs=esc(c.id).replace(/'/g,"\\'");
     var actions='<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">'+
+      '<button class="btn btn-gh btn-sm" onclick="viewSubEstimate(\''+billIdJs+'\',\''+chIdJs+'\')">&#128065; View</button>'+
       '<button class="btn btn-b btn-sm" onclick="printSubEstimate(\''+billIdJs+'\',\''+chIdJs+'\')">&#128424; Print</button>'+
       '<button class="btn btn-r btn-sm" onclick="downloadSubEstimate(\''+billIdJs+'\',\''+chIdJs+'\')">&#8681; PDF</button>'+
       '<button class="btn btn-sm" style="background:#25D366;color:#fff" onclick="shareSubEstimate(\''+billIdJs+'\',\''+chIdJs+'\')">&#128241; WhatsApp</button>'+
@@ -2659,13 +2681,14 @@ function buildDeliveryTimelineHtml(bill,challans){
     nodes.push({
       title:'Sub Estimate '+challanLabel(bill.billNumber,c.seq)+' — '+fmtNum(c.totalQtyLoaded)+' units loaded'+(c.totalAmountLoaded?' ('+fmtMoney(c.totalAmountLoaded)+')':''),
       time: fmtAuditTime(c.createdAt),
-      detail: '<div style="color:var(--text-muted);font-size:12.5px">by '+esc(c.createdBy||'unknown')+'</div>'+actions
+      detail: '<div style="color:var(--text-muted);font-size:12.5px">by '+esc(c.createdBy||'unknown')+'</div>'+actions,
+      state:'done'
     });
   });
   nodes.push({title:'Estimate Created', time: esc(bill.displayDate||''), detail:'Estimate #'+esc(bill.billNumber)+' prepared for '+esc(bill.customerName)+'.'});
 
   return '<div class="dl-timeline">'+nodes.map(function(n,idx){
-    return '<div class="dl-tl-item'+(n.active?' active':'')+(idx===nodes.length-1?' last':'')+'">'+
+    return '<div class="dl-tl-item'+(n.state?' st-'+n.state:'')+(idx===nodes.length-1?' last':'')+'">'+
       '<div class="dl-tl-dot"></div>'+
       '<div class="dl-tl-body"><div class="dl-tl-title">'+n.title+'</div>'+
       (n.time?'<div class="dl-tl-time">'+esc(n.time)+'</div>':'')+
@@ -2718,7 +2741,7 @@ window.editChallanUi=function(billId,challanId){
           '<div class="ddl" id="ec-add-ddl" style="position:absolute;left:0;right:0;top:100%;max-height:220px;overflow:auto;z-index:20"></div></div>'+
         '</div>'+
       '</div>'+
-      '<div class="modal-ftr"><button class="btn btn-gh" onclick="closeModal()">Cancel</button><button class="btn btn-r" onclick="saveEditedChallan()">&#128190; Save</button></div>'+
+      '<div class="modal-ftr"><button class="btn btn-gh" onclick="closeModal()">Cancel</button><button class="btn btn-r" onclick="saveEditedChallan()">&#128274; End Loading</button></div>'+
     '</div>');
     ecPaint();
   });
@@ -2843,7 +2866,17 @@ window.saveEditedChallan=function(){
   }
   function finish(){
     apiEditDeliveryChallan(challan.id,items,function(res){
-      if(!res||res.status!=='success'){toast('Could not save: '+((res&&res.message)||'unknown error'),'err');return;}
+      if(!res||res.status!=='success'){
+        var msg=(res&&res.message)||'unknown error';
+        if(/active loading session/i.test(msg)){
+          // the server still has a loading session open for this estimate — remember that locally
+          var li=bills.findIndex(function(b){return b._id===bill._id;});
+          if(li>=0){ bills[li]=Object.assign({},bills[li],{loadingActive:true}); saveAll(); }
+          toast('A loading session is still open on this estimate. Open Edit Estimate and press End Loading, then edit this sub estimate again.'+((newRows.length||editedRows.length)?' (Your order-quantity / new-item changes were already saved.)':''),'err');
+          return;
+        }
+        toast('Could not save: '+msg,'err'); return;
+      }
       var idx=bills.findIndex(function(b){return b._id===bill._id;});
       if(idx>=0){ bills[idx]=Object.assign({},bills[idx],res.bill); saveAll(); }
       var freshBill=idx>=0?bills[idx]:res.bill;

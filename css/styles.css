@@ -976,7 +976,15 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--gold); width: 
   position: absolute; left: 0; top: 3px; width: 16px; height: 16px; border-radius: 50%;
   background: var(--card-bg); border: 2.5px solid var(--text-muted);
 }
-.dl-tl-item.active .dl-tl-dot { border-color: var(--brand); background: var(--brand); box-shadow: 0 0 0 4px rgba(229, 56, 59, 0.18); }
+/* dot colours: green = finished, amber = estimate still open, red + blinking = loading still live */
+.dl-tl-item.st-done .dl-tl-dot { border-color: #22c55e; background: #22c55e; }
+.dl-tl-item.st-status .dl-tl-dot { border-color: #f59e0b; background: #f59e0b; box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.18); }
+.dl-tl-item.st-live .dl-tl-dot { border-color: #ef4444; background: #ef4444; animation: dlBlink 1s ease-in-out infinite; }
+@keyframes dlBlink {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.65); }
+  50%      { opacity: 0.35; box-shadow: 0 0 0 7px rgba(239, 68, 68, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .dl-tl-item.st-live .dl-tl-dot { animation: none; } }
 .dl-tl-title { font-weight: 700; font-size: 15px; color: var(--text-main); }
 .dl-tl-time { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 .dl-tl-detail { font-size: 13.5px; color: var(--text-main); margin-top: 6px; line-height: 1.55; }
