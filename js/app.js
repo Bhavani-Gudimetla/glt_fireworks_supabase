@@ -2610,6 +2610,23 @@ window.viewSubEstimate=function(billId,chId){
     if(w&&!w.closed) w.location.href=url; else window.open(url,'_blank');
   });
 };
+// Print / PDF download — same behaviour as the main estimate's buttons
+window.printSubEstimate=function(billId,chId){
+  var c=window._tlCh[chId], bill=bills.find(function(b){return b._id===billId;});
+  if(!c||!bill){ toast('Sub estimate not found','err'); return; }
+  var w=window.open('','_blank','width=900,height=700');
+  if(!w){ toast('Allow pop-ups to print','err'); return; }
+  w.document.write(buildDeliveryChallanHTML(bill,c));
+  w.document.close();
+  w.document.title=pdfSafeName(bill.customerName)+'_'+challanLabel(bill.billNumber,c.seq);
+  setTimeout(function(){w.print();},500);
+};
+window.downloadSubEstimate=function(billId,chId){
+  var c=window._tlCh[chId], bill=bills.find(function(b){return b._id===billId;});
+  if(!c||!bill){ toast('Sub estimate not found','err'); return; }
+  var fname=(pdfSafeName(bill.customerName)||'Customer')+'_'+pdfSafeName(challanLabel(bill.billNumber,c.seq))+'_'+pdfStamp()+'sub';
+  downloadPdfFromHtml(buildDeliveryChallanHTML(bill,c),fname);
+};
 window.shareSubEstimate=function(billId,chId){
   var wa=waOpener();
   var bill=bills.find(function(b){return b._id===billId;}), c=window._tlCh[chId];
@@ -2634,7 +2651,8 @@ function buildDeliveryTimelineHtml(bill,challans){
     var billIdJs=esc(bill._id).replace(/'/g,"\\'");
     var chIdJs=esc(c.id).replace(/'/g,"\\'");
     var actions='<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">'+
-      '<button class="btn btn-b btn-sm" onclick="viewSubEstimate(\''+billIdJs+'\',\''+chIdJs+'\')">&#128424; View</button>'+
+      '<button class="btn btn-b btn-sm" onclick="printSubEstimate(\''+billIdJs+'\',\''+chIdJs+'\')">&#128424; Print</button>'+
+      '<button class="btn btn-r btn-sm" onclick="downloadSubEstimate(\''+billIdJs+'\',\''+chIdJs+'\')">&#8681; PDF</button>'+
       '<button class="btn btn-sm" style="background:#25D366;color:#fff" onclick="shareSubEstimate(\''+billIdJs+'\',\''+chIdJs+'\')">&#128241; WhatsApp</button>'+
       (isAdmin?'<button class="btn btn-o btn-sm" onclick="editChallanUi(\''+billIdJs+'\',\''+chIdJs+'\')">&#9999; Edit</button>':'')+
       '</div>';
@@ -2669,13 +2687,19 @@ function ecKey(x){ return x.productId ? String(x.productId) : 'name:'+String(x.p
 window.editChallanUi=function(billId,challanId){
   var bill=bills.find(function(b){return b._id===billId;});
   if(!bill){toast('Estimate not found','err');return;}
+  if(bill.loadingActive){ toast('A loading session is running on this estimate — press End Loading (on the Edit Estimate screen) before editing an earlier sub estimate.','err'); return; }
   apiGetBillChallans(billId,function(challans){
     var challan=(challans||[]).find(function(c){return c.id===challanId;});
     if(!challan){toast('Sub estimate not found','err');return;}
+    // sub estimates made before product ids were stored are matched by name
     var inRound={};
-    (challan.items||[]).forEach(function(it){ inRound[ecKey(it)]=Number(it.loadedThisRound)||0; });
+    (challan.items||[]).forEach(function(it){
+      var q=Number(it.loadedThisRound)||0;
+      if(it.productId) inRound[String(it.productId)]=q;
+      inRound['name:'+String(it.productName||'').toLowerCase()]=q;
+    });
     var rows=(bill.items||[]).map(function(it,i){
-      var q=inRound[ecKey(it)]||0;
+      var q=(it.productId&&inRound[String(it.productId)]!=null)?inRound[String(it.productId)]:(inRound['name:'+String(it.productName||'').toLowerCase()]||0);
       var cs=Number(it.cases)||0, qp=Number(it.qtyPerCase)||0, tq=Number(it.totalQty)||0;
       return {serial:i+1, productId:it.productId||null, productName:it.productName, uom:it.uom||'',
               cases:cs, qpc:qp, totalQty:tq, o:{cases:cs,qpc:qp,totalQty:tq},
@@ -2806,11 +2830,17 @@ function adjustStock(list){
 window.saveEditedChallan=function(){
   var s=window._ec; if(!s)return;
   var bill=s.bill, challan=s.challan;
+  var liveBill=bills.find(function(b){return b._id===bill._id;});
+  if(liveBill&&liveBill.loadingActive){ toast('A loading session is running on this estimate — end it first, then edit this sub estimate.','err'); return; }
   var newRows=s.rows.filter(function(r){ return r.isNew && r.qty>0; });
   var editedRows=s.rows.filter(function(r){ return !r.isNew && (r.cases!==r.o.cases||r.qpc!==r.o.qpc||r.totalQty!==r.o.totalQty); });
   var items=s.rows.filter(function(r){ return !r.isNew || r.qty>0; }).map(function(r){
     return {productId:r.productId||null, productName:r.productName, loadedThisRound:r.qty||0};
   });
+  if(!items.some(function(x){return x.loadedThisRound>0;})){
+    toast('Enter a loaded quantity for at least one item — a sub estimate cannot be empty.','err');
+    return;
+  }
   function finish(){
     apiEditDeliveryChallan(challan.id,items,function(res){
       if(!res||res.status!=='success'){toast('Could not save: '+((res&&res.message)||'unknown error'),'err');return;}
