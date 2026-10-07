@@ -2996,7 +2996,7 @@ function buildCustomerStats(customer){
     totalBilled+=Number(b.totalAmount||0);
     var billPending=0;
     (b.items||[]).forEach(function(item){
-      var pending=item.qtyPending!=null?Number(item.qtyPending):0;
+      var pending=livePending(item);
       if(pending>0) billPending+=pending*Number(item.sellingPrice||0);
     });
     pendingValue+=billPending;
@@ -3855,7 +3855,7 @@ function renderHistoryList(){
     var parentBadge=b.parentBillId?'<span class="tag tag-b" style="font-size:12px">Edited</span>':'';
     var closedBadge=b.orderStatus==='closed'?'<span class="tag" style="background:rgba(22,163,74,0.16);color:#16a34a;font-size:12px">&#9989; Closed</span>':'';
     var loadingBadge=(!b.orderStatus||b.orderStatus!=='closed')&&b.loadingActive?'<span class="tag" style="background:rgba(245,158,11,0.16);color:#fbbf24;font-size:12px">&#128666; Loading</span>':'';
-    var pendingItems=(b.items||[]).filter(function(it){return (it.qtyPending||0)>0;});
+    var pendingItems=(b.items||[]).filter(function(it){return livePending(it)>0;});
     var pendingBadge=(!closedBadge&&pendingItems.length)?'<span class="tag" style="background:rgba(245,158,11,0.16);color:#fbbf24;font-size:12px">&#9888; '+pendingItems.length+' pending</span>':'';
     // qtyPending is clamped at 0, so an over-load (loaded beyond what's still owed) needs its own check
     var overloadedItems=(b.items||[]).filter(function(it){return (Number(it.qtyLoaded)||0)>Math.max(0,(Number(it.totalQty)||0)-(Number(it.qtyDelivered)||0));});
@@ -4533,12 +4533,17 @@ var pendingLoadsSearch='';
 // Aggregates every bill's pending (unloaded) item quantities, both per
 // customer and as a grand total per item. Source of truth is the same
 // qtyPending already tracked on each bill item — no separate state needed.
+// What is still owed on an item right now: ordered - already delivered - staged for loading.
+// Same figure the estimate's own screen shows (never the stored qtyPending, which can lag behind).
+function livePending(item){
+  return Math.max(0,(Number(item.totalQty)||0)-(Number(item.qtyDelivered)||0)-(Number(item.qtyLoaded)||0));
+}
 function buildPendingLoadsData(){
   var byCustomer={}; // customerName -> { total, items: { productName: {qty, uom} } }
   var byItem={};      // productName -> { qty, uom }
   bills.forEach(function(b){
     (b.items||[]).forEach(function(item){
-      var pending=item.qtyPending!=null?Number(item.qtyPending):0;
+      var pending=livePending(item);
       if(!pending||pending<=0)return;
       var cust=b.customerName||'Unknown';
       if(!byCustomer[cust])byCustomer[cust]={total:0,items:{}};
@@ -4562,12 +4567,13 @@ function buildPendingLoadsByBillForCustomer(customerName){
     var items=[];
     var billTotal=0;
     (b.items||[]).forEach(function(item){
-      var pending=item.qtyPending!=null?Number(item.qtyPending):0;
+      var pending=livePending(item);
       if(pending>0){
         items.push({name:item.productName,qty:pending,uom:item.uom||'',
           cases:item.cases||0,qpc:item.qtyPerCase||0,totalQty:Number(item.totalQty)||0,
           price:item.sellingPrice||0,amount:Number(item.totalAmount)||0,
-          loaded:item.qtyLoaded!=null?Number(item.qtyLoaded):0});
+          // everything loaded so far (earlier sub estimates + the current round)
+          loaded:(Number(item.qtyDelivered)||0)+(item.qtyLoaded!=null?Number(item.qtyLoaded):0)});
         billTotal+=pending;
       }
     });
@@ -4588,7 +4594,8 @@ function buildPendingStmtBillHtml(r,print){
   var body=r.items.map(function(it,i){
     var diff=Math.round((it.loaded-it.totalQty)*1000)/1000;
     var pc=diff===0?green:(diff>0?red:blue);
-    var pTxt=(diff>0?'+':'')+diff;
+    // same wording as the estimate screen: the number still to load (blue), "+N" if over-loaded (red)
+    var pTxt=diff>0?'+'+fmtNum(diff):fmtNum(-diff);
     var redSt=' style="color:'+red+';font-weight:700"';
     return '<tr><td>'+(i+1)+'</td><td style="font-weight:700">'+esc(it.name)+'</td>'+
       '<td>'+(it.cases||'—')+'</td><td>'+(it.cases?(it.qpc||'—'):'—')+'</td>'+
@@ -4668,7 +4675,13 @@ function paintPendingLoadsNav(){
   var box=document.getElementById('pl-cust-nav');
   if(box) box.innerHTML=buildPendingCustNavHtml(filteredPendingCustNames(data),data);
 }
-window.selectPendingLoadsCustomer=function(name){ pendingLoadsSelected=name; paintPendingLoadsNav(); paintPendingLoadsDetail(); };
+// The search box finds customers OR products. Picking a customer from the list clears it, so
+// that customer's whole pending list shows instead of being filtered by the name just typed.
+window.selectPendingLoadsCustomer=function(name){
+  pendingLoadsSelected=name; pendingLoadsSearch='';
+  var s=document.getElementById('pl-loads-search'); if(s) s.value='';
+  paintPendingLoadsNav(); paintPendingLoadsDetail();
+};
 window.selectPendingLoadsTotals=function(){ pendingLoadsSelected=null; paintPendingLoadsNav(); paintPendingLoadsDetail(); };
 
 // Right-hand panel: either the selected customer's per-bill breakdown (with Print / WhatsApp,
